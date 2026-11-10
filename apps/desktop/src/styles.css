@@ -1,0 +1,310 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Light and dark both follow the system unless the user picks one (data-theme on <html>). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --background: #f3f3f3;
+  --pane: #ffffff;
+  --foreground: #171717;
+  --muted: #f1f1f1;
+  --muted-strong: #e8e8e8;
+  --muted-foreground: #5c5c5c;
+  --line: #e6e6e6;
+  --primary: #5b47c7;
+  --primary-foreground: #ffffff;
+  --destructive: #c4302b;
+  --destructive-foreground: #ffffff;
+  --mark-deep: #4a37b8;
+  --mark-light: #c9bfff;
+  --mark-mid: #8a78ec;
+  --shadow-pane: 0 1px 2px rgb(0 0 0 / 0.05), 0 1px 1px rgb(0 0 0 / 0.03);
+  --shadow-float: 0 8px 24px -6px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.06);
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-backdrop: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0b0b0c;
+    --pane: #161617;
+    --foreground: #ededed;
+    --muted: #1f1f21;
+    --muted-strong: #29292c;
+    --muted-foreground: #a6a6a6;
+    --line: #2a2a2d;
+    --primary: #a896ff;
+    --primary-foreground: #15121f;
+    --destructive: #ff7a72;
+    --destructive-foreground: #1f0d0c;
+    --mark-deep: #5440cf;
+    --mark-light: #d6ceff;
+    --mark-mid: #9a89f5;
+    --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.03);
+    --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0b0b0c;
+  --pane: #161617;
+  --foreground: #ededed;
+  --muted: #1f1f21;
+  --muted-strong: #29292c;
+  --muted-foreground: #a6a6a6;
+  --line: #2a2a2d;
+  --primary: #a896ff;
+  --primary-foreground: #15121f;
+  --destructive: #ff7a72;
+  --destructive-foreground: #1f0d0c;
+  --mark-deep: #5440cf;
+  --mark-light: #d6ceff;
+  --mark-mid: #9a89f5;
+  --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.03);
+  --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-pane: var(--pane);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-strong: var(--muted-strong);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-line: var(--line);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-pane: var(--shadow-pane);
+  --shadow-float: var(--shadow-float);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
+@layer base {
+  /* In the base layer so utilities (such as the underline inputs' outline-none) can override it. */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.scroll-pane {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-strong) transparent;
+}
+
+/* Pressable feedback, used by every button. */
+.press {
+  transition:
+    transform 160ms var(--ease-smooth),
+    background-color 150ms var(--ease-smooth),
+    color 150ms var(--ease-smooth),
+    opacity 150ms var(--ease-smooth);
+}
+.press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Dialogs: native <dialog> with a settle-in motion. */
+dialog.sotto-dialog {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+}
+dialog.sotto-dialog::backdrop {
+  background: rgb(0 0 0 / 0.32);
+  animation: fade-in 200ms var(--ease-smooth);
+}
+dialog.sotto-dialog[open] > .dialog-card {
+  animation: dialog-in 220ms var(--ease-smooth);
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Brand mark loading indicator: the mark drawing itself. */
+.mark-draw path {
+  stroke-dasharray: 120;
+  stroke-dashoffset: 120;
+  animation: mark-draw 1.6s var(--ease-smooth) infinite alternate;
+}
+@keyframes mark-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Hand-built art moves quietly on hover. */
+@media (hover: hover) and (pointer: fine) {
+  .mark-hover:hover .mark-bubble {
+    transform: translateY(-1px) rotate(-3deg);
+  }
+  .mark-hover:hover .mark-hush {
+    transform: scaleX(0.7);
+  }
+  .glyph-host:hover .g-nudge-down {
+    transform: translateY(1.5px);
+  }
+  .glyph-host:hover .g-nudge-right {
+    transform: translateX(1.5px);
+  }
+  .glyph-host:hover .g-turn {
+    transform: rotate(45deg);
+  }
+  .glyph-host:hover .g-lift {
+    transform: translateY(-1.5px);
+  }
+  .glyph-host:hover .g-tilt {
+    transform: rotate(-8deg);
+  }
+}
+.mark-bubble,
+.mark-hush,
+.g-nudge-down,
+.g-nudge-right,
+.g-turn,
+.g-lift,
+.g-tilt {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 220ms var(--ease-smooth);
+}
+
+/* Spot illustrations: slow ambient loops. */
+.spot-float {
+  animation: spot-float 5s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.spot-drift {
+  animation: spot-drift 6s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.spot-pulse {
+  animation: spot-pulse 4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes spot-float {
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes spot-drift {
+  50% {
+    transform: translateX(3px) translateY(-2px);
+  }
+}
+@keyframes spot-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.live-dot {
+  animation: spot-pulse 2.4s ease-in-out infinite;
+}
+
+/* Loading line living in the pane header's bottom border. */
+.loading-line {
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: loading-sweep 1.2s var(--ease-smooth) infinite;
+}
+@keyframes loading-sweep {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--muted) 0%, var(--muted-strong) 50%, var(--muted) 100%);
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+@keyframes skeleton {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .mark-draw path {
+    stroke-dashoffset: 0;
+  }
+}

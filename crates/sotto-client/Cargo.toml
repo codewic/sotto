@@ -1,0 +1,24 @@
+[package]
+name = "sotto-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+futures-util = "0.3.34"
+postcard = "1.1.3"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11"
+sotto-core = { version = "0.1.0", path = "../sotto-core" }
+sotto-vault = { version = "0.1.0", path = "../sotto-vault" }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
+tokio-socks = "0.5.3"
+tokio-tungstenite = "0.30.0"
+zeroize = "1.9.1"
+
+[dev-dependencies]
+sotto-relay = { path = "../sotto-relay" }
+tempfile = "3.27.0"

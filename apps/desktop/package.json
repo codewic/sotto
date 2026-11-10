@@ -1,0 +1,30 @@
+{
+  "name": "sotto-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "electron": "electron ."
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@tanstack/react-query": "^5.107.1",
+    "lucide-react": "^1.71.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "5",
+    "tailwindcss": "4.3.3",
+    "typescript": "~5.9.3",
+    "vite": "7"
+  }
+}

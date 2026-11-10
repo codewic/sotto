@@ -1,0 +1,8 @@
+# Sotto relay onion service. Append to /etc/tor/torrc.
+HiddenServiceDir /var/lib/tor/sotto-relay/
+HiddenServicePort 80 127.0.0.1:7400
+HiddenServiceVersion 3
+# Proof-of-work defence against floods (Tor 0.4.8+).
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 100
+HiddenServicePoWQueueBurst 1000

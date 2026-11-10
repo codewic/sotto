@@ -1,0 +1,7 @@
+# Sotto source drop onion service. Append to /etc/tor/torrc.
+HiddenServiceDir /var/lib/tor/sotto-drop/
+HiddenServicePort 80 127.0.0.1:7500
+HiddenServiceVersion 3
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 50
+HiddenServicePoWQueueBurst 500

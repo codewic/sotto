@@ -1,0 +1,31 @@
+[Unit]
+Description=Sotto source drop (onion service only)
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+User=sotto-drop
+ExecStart=/usr/local/bin/sotto-drop serve --config /etc/sotto/drop.json
+Restart=on-failure
+StandardOutput=null
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sotto-drop
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
