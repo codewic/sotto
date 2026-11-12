@@ -12,6 +12,9 @@ import { useToast } from "../ui/toast";
 import { PaneHeader } from "./Shell";
 
 type Role = "owner" | "editor" | "reporter" | "lawyer";
+
+/** Role names shown to people; the stored values stay as they were. */
+const roleLabel: Record<Role, string> = { owner: "Owner", editor: "Editor", reporter: "Contributor", lawyer: "Legal" };
 type CaseItem = {
   id: string;
   title: string;
@@ -40,9 +43,9 @@ export function Cases() {
     <div className="flex h-full min-h-0">
       <section className="flex w-[300px] shrink-0 flex-col border-r border-line">
         <PaneHeader
-          title="Cases"
+          title="Projects"
           actions={
-            <IconButton label="New case" onClick={() => setCreating(true)}>
+            <IconButton label="New project" onClick={() => setCreating(true)}>
               <Plus size={16} />
             </IconButton>
           }
@@ -53,7 +56,7 @@ export function Cases() {
             <button key={c.id} onClick={() => setSelected(c.id)} className={`press flex w-full cursor-pointer flex-col rounded-xl px-3 py-2.5 text-left ${selected === c.id ? "bg-muted" : "hover:bg-muted/60"}`}>
               <span className="truncate text-[14px] font-medium">{c.title}</span>
               <span className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                {c.owner ? "You own this case" : "Member"} · {c.members.filter((m) => !m.pending).length} on the team
+                {c.owner ? "You own this project" : "Member"} · {c.members.filter((m) => !m.pending).length} on the team
                 {c.legal_hold && <Lock size={12} aria-label="Legal hold" />}
               </span>
             </button>
@@ -80,14 +83,14 @@ export function Cases() {
           <div className="grid flex-1 place-items-center">
             <Empty
               art={<SpotCases />}
-              title={list.length ? "Choose a case" : "No cases yet"}
+              title={list.length ? "Choose a project" : "No projects yet"}
               action={
                 <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
-                  New case
+                  New project
                 </Button>
               }
             >
-              A case keeps an investigation's notes and source pseudonyms in one end-to-end encrypted space for the reporters, editors and lawyers working on it. Sources are never named here.
+              A project keeps sensitive work in one end-to-end encrypted space for the people on it: an incident, a legal matter, a deal, an investigation. Notes, people referred to by pseudonym, legal hold and an insurance file. Real names of protected people never go in.
             </Empty>
           </div>
         )}
@@ -107,7 +110,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
   const [alias, setAlias] = useState("");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<"members" | "protect" | "destroy" | null>(null);
-  if (!c.data) return <PaneHeader title="Case" loading />;
+  if (!c.data) return <PaneHeader title="Project" loading />;
   const k = c.data;
 
   async function submit(e: React.FormEvent) {
@@ -145,7 +148,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
             <Button size="sm" variant="ghost" icon={<ShieldCheck size={14} />} onClick={() => setDialog("protect")}>
               Protection
             </Button>
-            <IconButton label="Destroy case" onClick={() => setDialog("destroy")}>
+            <IconButton label="Destroy project" onClick={() => setDialog("destroy")}>
               <Trash2 size={16} />
             </IconButton>
           </>
@@ -162,7 +165,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
               <li key={e.id} className="rounded-2xl bg-muted px-4 py-3">
                 <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
                   <span className="font-medium text-foreground">{e.author}</span>
-                  {e.kind === "source" && <Chip tone="accent">Source · {e.alias}</Chip>}
+                  {e.kind === "source" && <Chip tone="accent">Pseudonym · {e.alias}</Chip>}
                   <span className="ml-auto tabular">{timeLabel(e.at)}</span>
                 </div>
                 {e.text && <p className="mt-1.5 text-[14px] leading-relaxed whitespace-pre-wrap">{e.text}</p>}
@@ -173,7 +176,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
       </div>
       {k.removed ? (
         <div className="px-6 pb-5">
-          <Notice>You were removed from this case. You can read what you had, but can't add to it.</Notice>
+          <Notice>You were removed from this project. You can read what you had, but can't add to it.</Notice>
         </div>
       ) : (
         <form onSubmit={submit} className="shrink-0 px-6 pt-2 pb-5">
@@ -185,25 +188,25 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
                 onChange={setMode}
                 options={[
                   { value: "note", label: "Note" },
-                  { value: "source", label: "Source" },
+                  { value: "source", label: "Pseudonym" },
                 ]}
               />
-              <span className="text-[12px] text-muted-foreground">Seen only by this case's team</span>
+              <span className="text-[12px] text-muted-foreground">Seen only by this project's team</span>
             </div>
             {mode === "source" && (
-              <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Pseudonym, for example Source QV4. Never a real name." aria-label="Source pseudonym" className="mb-1 w-full bg-transparent px-1 py-1.5 text-[14px] font-medium outline-none placeholder:text-muted-foreground" />
+              <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Pseudonym, for example Client QV4 or Witness A. Never a real name." aria-label="Pseudonym" className="mb-1 w-full bg-transparent px-1 py-1.5 text-[14px] font-medium outline-none placeholder:text-muted-foreground" />
             )}
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={2}
-              placeholder={mode === "note" ? "Add a note for the team" : "What the team should know about this source (role, reliability), without identifying them"}
-              aria-label={mode === "note" ? "Note" : "Source note"}
+              placeholder={mode === "note" ? "Add a note for the team" : "What the team should know about them (role, reliability), without identifying them"}
+              aria-label={mode === "note" ? "Note" : "Pseudonym note"}
               className="w-full resize-none bg-transparent px-1 py-1 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground"
             />
             <div className="flex justify-end">
               <Button size="sm" variant="primary" type="submit" loading={busy} disabled={mode === "note" ? !text.trim() : !alias.trim()}>
-                {mode === "note" ? "Add note" : "Add source"}
+                {mode === "note" ? "Add note" : "Add pseudonym"}
               </Button>
             </div>
           </div>
@@ -215,7 +218,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
         open={dialog === "destroy"}
         onClose={() => setDialog(null)}
         title={`Destroy ${k.title}?`}
-        description={k.owner ? "Its key is destroyed on every member's desk, which makes every note and record unreadable everywhere. This can't be undone." : "Your copy is destroyed and you leave the case. The rest of the team keeps theirs."}
+        description={k.owner ? "Its key is destroyed on every member's device, which makes every note and record unreadable everywhere. This can't be undone." : "Your copy is destroyed and you leave the project. The rest of the team keeps theirs."}
       >
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setDialog(null)}>
@@ -229,7 +232,7 @@ function CaseView({ id, onGone }: { id: string; onGone: () => void }) {
               onGone();
             }}
           >
-            Destroy case
+            Destroy project
           </Button>
         </div>
       </Dialog>
@@ -243,7 +246,7 @@ function NewCaseDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onClose={onClose} title="New case" description="Use a working title that wouldn't give the story away if someone saw it.">
+    <Dialog open={open} onClose={onClose} title="New project" description="Use a working title that wouldn't give the work away if someone saw it.">
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -268,7 +271,7 @@ function NewCaseDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             Cancel
           </Button>
           <Button variant="primary" type="submit" loading={busy} disabled={!title.trim()}>
-            Open case
+            Open project
           </Button>
         </div>
       </form>
@@ -284,13 +287,13 @@ function MembersDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
   const [role, setRole] = useState<Role>("editor");
   const ready = (contacts.data ?? []).filter((c) => c.state === "ready");
   return (
-    <Dialog open={open} onClose={onClose} title="Team" description="Everyone here can read the whole case. Only the owner adds or removes people." width={520}>
+    <Dialog open={open} onClose={onClose} title="Team" description="Everyone here can read the whole project. Only the owner adds or removes people." width={520}>
       <ul className="flex flex-col divide-y divide-line">
         {k.members.map((m) => (
           <li key={m.name} className="flex items-center justify-between py-2.5">
             <span className="text-[14px]">
-              {m.name} <span className="text-muted-foreground capitalize">· {m.role}</span>
-              {m.pending && <span className="ml-1.5 text-[12px] text-muted-foreground">(waiting for their desk)</span>}
+              {m.name} <span className="text-muted-foreground">· {roleLabel[m.role as Role] ?? m.role}</span>
+              {m.pending && <span className="ml-1.5 text-[12px] text-muted-foreground">(waiting for their device)</span>}
             </span>
             {k.owner && m.role !== "owner" && (
               <Button
@@ -342,13 +345,13 @@ function MembersDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
             onChange={setRole}
             options={[
               { value: "editor", label: "Editor" },
-              { value: "reporter", label: "Reporter" },
-              { value: "lawyer", label: "Lawyer" },
+              { value: "reporter", label: "Contributor" },
+              { value: "lawyer", label: "Legal" },
             ]}
           />
           <div className="flex justify-end">
             <Button size="sm" variant="primary" type="submit" disabled={!contact}>
-              Add to case
+              Add to project
             </Button>
           </div>
         </form>
@@ -382,7 +385,7 @@ function ProtectDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
       <div className="flex flex-col gap-7">
         <section>
           <h3 className="text-[14px] font-semibold">Automatic destruction</h3>
-          <p className="mt-0.5 text-[13px] text-muted-foreground">On the date, every desk destroys the case key. Nothing can bring it back.</p>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">On the date, every member's device destroys the project key. Nothing can bring it back.</p>
           <div className="mt-3">
             <Segmented
               label="Destroy after"
@@ -399,7 +402,7 @@ function ProtectDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
           <label className="mt-4 flex items-center justify-between gap-4">
             <span>
               <span className="block text-[14px] font-medium">Legal hold</span>
-              <span className="block text-[13px] text-muted-foreground">Pauses automatic destruction while lawyers need the record.</span>
+              <span className="block text-[13px] text-muted-foreground">Pauses automatic destruction while legal needs the record.</span>
             </span>
             <Switch checked={k.legal_hold} onChange={(v) => (k.owner ? run(() => patch(`/api/cases/${k.id}`, { legal_hold: v }), v ? "Legal hold on." : "Legal hold off.") : toast("info", "Only the owner can change this."))} label="Legal hold" />
           </label>
@@ -407,7 +410,7 @@ function ProtectDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
         <section>
           <h3 className="text-[14px] font-semibold">Insurance file</h3>
           <p className="mt-0.5 text-[13px] text-muted-foreground">
-            If you stop checking in, colleagues you choose can open a copy of this case's notes. The relay keeps it locked until then; they hold the key. Unlocking Sotto counts as a check-in.
+            If you stop checking in, colleagues you choose can open a copy of this project's notes. The relay keeps it locked until then; they hold the key. Unlocking Sotto counts as a check-in.
           </p>
           {k.insurance ? (
             <div className="mt-3 flex flex-col gap-3">
@@ -457,7 +460,7 @@ function ProtectDialog({ open, onClose, k }: { open: boolean; onClose: () => voi
               </div>
             </div>
           ) : (
-            <p className="mt-3 text-[13px] text-muted-foreground">Only the case owner can set this up.</p>
+            <p className="mt-3 text-[13px] text-muted-foreground">Only the project owner can set this up.</p>
           )}
         </section>
       </div>
@@ -503,7 +506,7 @@ function GrantDialog({ grant, onClose }: { grant: Grant | null; onClose: () => v
         <ol className="flex max-h-96 flex-col gap-2 overflow-y-auto">
           {result.entries?.map((e) => (
             <li key={e.id} className="rounded-xl bg-muted px-3 py-2 text-[13.5px]">
-              <span className="font-medium">{e.author}</span> {e.alias && <Chip>Source · {e.alias}</Chip>}
+              <span className="font-medium">{e.author}</span> {e.alias && <Chip>Pseudonym · {e.alias}</Chip>}
               <p className="whitespace-pre-wrap">{e.text}</p>
             </li>
           ))}

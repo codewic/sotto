@@ -1,0 +1,37 @@
+# LiveKit for Sotto calls. setup.sh renders livekit.yaml from this file.
+# API keys come from the LIVEKIT_KEYS environment variable (docker-compose.yml), never this file.
+
+# Signalling. Reached only through Caddy; the firewall keeps it off the internet.
+port: 7880
+
+rtc:
+  # Media over TCP when UDP is blocked.
+  tcp_port: 7881
+  # All media UDP on one port.
+  udp_port: 7882
+  # Advertise the server's public address.
+  use_external_ip: __USE_EXTERNAL_IP__
+
+# Built-in TURN relay, for networks where direct UDP to the server fails.
+turn:
+  enabled: true
+  domain: __CALLS_DOMAIN__
+  udp_port: 3478
+  relay_range_start: 30000
+  relay_range_end: 30200
+  # TURN over TLS (optional, see README.md): uncomment after Caddy has its certificate.
+  # tls_port: 5349
+  # cert_file: /caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/__CALLS_DOMAIN__/__CALLS_DOMAIN__.crt
+  # key_file: /caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/__CALLS_DOMAIN__/__CALLS_DOMAIN__.key
+
+# Defaults. Each call's token also carries its own limits (participants, empty timeout).
+room:
+  auto_create: true
+  empty_timeout: 30
+  departure_timeout: 20
+  max_participants: 8
+
+# Nothing about calls is worth keeping. No webhooks, no recording, no analytics are configured.
+logging:
+  level: warn
+  pion_level: error

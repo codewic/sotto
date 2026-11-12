@@ -37,6 +37,9 @@ const MAX_CREATES_PER_CONN: u32 = 2000;
 /// Queues with nothing waiting and no activity for this long are removed.
 const QUEUE_IDLE_SECS: u64 = 90 * DAY;
 const DAY: u64 = 86_400;
+/// Tags: ready invites kept per tag, and the largest invite accepted.
+const MAX_TAG_INVITES: usize = 32;
+const MAX_INVITE_BYTES: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -95,6 +98,19 @@ struct TimeLock {
     chunks: Vec<Vec<u8>>,
 }
 
+/// A short name someone claimed, and the one-time invites waiting under it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Tag {
+    owner: [u8; 32],
+    invites: VecDeque<(Vec<u8>, u64)>,
+}
+
+/// 3 to 24 characters: lowercase letters, digits, dot and underscore, starting with a letter.
+pub fn valid_tag(t: &str) -> bool {
+    let b = t.as_bytes();
+    (3..=24).contains(&b.len()) && b[0].is_ascii_lowercase() && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'_')
+}
+
 #[derive(Default)]
 struct State {
     queues: HashMap<Id, Queue>,
@@ -104,6 +120,7 @@ struct State {
     files: HashMap<Id, FileEntry>,
     timelocks: HashMap<Id, TimeLock>,
     tl_read: HashMap<Id, Id>,
+    tags: HashMap<String, Tag>,
     bytes: usize,
     next_conn: ConnId,
     creates: HashMap<ConnId, u32>,
@@ -125,6 +142,7 @@ pub async fn serve(listener: TcpListener, config: Config) -> std::io::Result<()>
     let shared = Arc::new(Shared { state: Mutex::new(State::default()), config });
     load_meta(&shared)?;
     load_timelocks(&shared)?;
+    load_tags(&shared);
     let sweeper = shared.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
@@ -476,7 +494,78 @@ fn dispatch(shared: &Shared, conn: ConnId, nonce: &[u8; 32], tx: &Tx, frame: Cli
             }
             resp(corr, Resp::Ok)
         }
+
+        Cmd::TagAdd { tag, owner, invites, sig } => {
+            if !valid_tag(&tag) || invites.iter().any(|(i, _)| i.len() > MAX_INVITE_BYTES) {
+                return err(corr, ErrCode::BadRequest);
+            }
+            let mut digest = Vec::new();
+            for (i, exp) in &invites {
+                digest.extend_from_slice(&sotto_core::kdf::sha256(i));
+                digest.extend_from_slice(&exp.to_be_bytes());
+            }
+            let digest = sotto_core::kdf::sha256(&digest);
+            // The first claim decides the owner; after that only the owner may add.
+            let key = st.tags.get(&tag).map(|x| x.owner).unwrap_or(owner);
+            if key != owner || !check(&owner, nonce, "tagadd", &[tag.as_bytes(), &digest], &sig) {
+                return err(corr, ErrCode::Auth);
+            }
+            let entry = st.tags.entry(tag).or_insert_with(|| Tag { owner, invites: VecDeque::new() });
+            entry.invites.retain(|(_, exp)| *exp > t);
+            for inv in invites {
+                if entry.invites.len() >= MAX_TAG_INVITES {
+                    break;
+                }
+                if inv.1 > t {
+                    entry.invites.push_back(inv);
+                }
+            }
+            let left = entry.invites.len() as u32;
+            save_tags(shared, &st);
+            resp(corr, Resp::TagLeft { left })
+        }
+        Cmd::TagTake { tag } => {
+            // Counted like creates, so one connection can't drain a tag in a loop.
+            let n = st.creates.entry(conn).or_insert(0);
+            *n += 50;
+            if *n > MAX_CREATES_PER_CONN {
+                return err(corr, ErrCode::Full);
+            }
+            let Some(entry) = st.tags.get_mut(&tag) else { return err(corr, ErrCode::NotFound) };
+            entry.invites.retain(|(_, exp)| *exp > t);
+            let Some((invite, _)) = entry.invites.pop_front() else { return err(corr, ErrCode::NotFound) };
+            save_tags(shared, &st);
+            resp(corr, Resp::TagInvite { invite })
+        }
+        Cmd::TagDel { tag, sig } => {
+            let Some(entry) = st.tags.get(&tag) else { return err(corr, ErrCode::NotFound) };
+            if !check(&entry.owner, nonce, "tagdel", &[tag.as_bytes()], &sig) {
+                return err(corr, ErrCode::Auth);
+            }
+            st.tags.remove(&tag);
+            save_tags(shared, &st);
+            resp(corr, Resp::Ok)
+        }
     }
+}
+
+/// Tags survive a restart (their invites are public material: an invite only opens a mailbox).
+fn save_tags(shared: &Shared, st: &State) {
+    let Some(dir) = &shared.config.data_dir else { return };
+    let all: Vec<(&String, &Tag)> = st.tags.iter().collect();
+    if let Ok(bytes) = postcard::to_stdvec(&all) {
+        let tmp = dir.join(format!("tags.{}.tmp", sotto_core::hex(&sotto_core::rand::bytes::<4>())));
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(tmp, dir.join("tags.bin"));
+        }
+    }
+}
+
+fn load_tags(shared: &Shared) {
+    let Some(dir) = &shared.config.data_dir else { return };
+    let Ok(bytes) = std::fs::read(dir.join("tags.bin")) else { return };
+    let Ok(all) = postcard::from_bytes::<Vec<(String, Tag)>>(&bytes) else { return };
+    shared.lock().tags = all.into_iter().collect();
 }
 
 fn persist(shared: &Shared, tl_id: &Id, tl: &TimeLock) -> std::io::Result<()> {

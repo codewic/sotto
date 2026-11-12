@@ -18,7 +18,7 @@ export function Chip({ tone = "neutral", children }: { tone?: "neutral" | "accen
 
 export function Segmented<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[]; label: string }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-full bg-muted p-1">
+    <div role="radiogroup" aria-label={label} className="no-scrollbar inline-flex max-w-full overflow-x-auto rounded-full bg-muted p-1">
       {options.map((o) => (
         <button
           key={o.value}
@@ -26,7 +26,7 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
           role="radio"
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
-          className={`press h-8 cursor-pointer rounded-full px-3.5 text-[13px] font-medium ${value === o.value ? "bg-pane text-foreground shadow-pane" : "text-muted-foreground hover:text-foreground"}`}
+          className={`press h-8 shrink-0 cursor-pointer rounded-full px-3.5 text-[13px] font-medium whitespace-nowrap ${value === o.value ? "bg-pane text-foreground shadow-pane" : "text-muted-foreground hover:text-foreground"}`}
         >
           {o.label}
         </button>

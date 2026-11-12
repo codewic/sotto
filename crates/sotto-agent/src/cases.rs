@@ -23,8 +23,8 @@ use crate::state::{Agent, Session};
 
 #[derive(Default)]
 pub struct Runtime {
-    mls: Option<Mls>,
-    seqs: HashMap<Id, Arc<AtomicU64>>,
+    pub(crate) mls: Option<Mls>,
+    pub(crate) seqs: HashMap<Id, Arc<AtomicU64>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,13 +156,13 @@ fn add_entry(s: &Session, c: &CaseRecord, author: &str, kind: EntryKind, id: Opt
     Ok(())
 }
 
-async fn my_name(s: &Session) -> String {
+pub(crate) async fn my_name(s: &Session) -> String {
     let n = s.engine.profile().await.display_name;
-    if n.trim().is_empty() { "This desk".into() } else { n }
+    if n.trim().is_empty() { "This device".into() } else { n }
 }
 
 /// Load (or create) the desk's MLS client.
-async fn ensure_mls(s: &Session, rt: &mut Runtime) -> Result<(), ApiError> {
+pub(crate) async fn ensure_mls(s: &Session, rt: &mut Runtime) -> Result<(), ApiError> {
     if rt.mls.is_some() {
         return Ok(());
     }
@@ -178,7 +178,7 @@ async fn ensure_mls(s: &Session, rt: &mut Runtime) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn persist_mls(s: &Session, rt: &Runtime) -> Result<(), ApiError> {
+pub(crate) fn persist_mls(s: &Session, rt: &Runtime) -> Result<(), ApiError> {
     if let Some(m) = &rt.mls {
         s.cases.put("mls", &m.snapshot())?;
     }
@@ -186,7 +186,7 @@ fn persist_mls(s: &Session, rt: &Runtime) -> Result<(), ApiError> {
 }
 
 async fn gsend(s: &Session, c: &mut CaseRecord, bytes: Vec<u8>) -> Result<(), ApiError> {
-    let blob = pad::pad(&bytes, BLOB_SIZE).map_err(|_| ApiError::Invalid("That's too long for one case message.".into()))?;
+    let blob = pad::pad(&bytes, BLOB_SIZE).map_err(|_| ApiError::Invalid("That's too long for one project message.".into()))?;
     let write_id = c.write_id;
     match s.engine.relay(&c.relay).await.request(move |_| Cmd::GSend { write_id, blob }).await? {
         Resp::GSeq { seq } => {
@@ -223,6 +223,9 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
             }
         }
     }
+    crate::groups::start(agent, s).await;
+    crate::secrets::start(s);
+    crate::tags::start(agent, s);
     let (a, sess) = (agent.clone(), s.clone());
     tokio::spawn(async move {
         while let Some(p) = rx.recv().await {
@@ -255,7 +258,11 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
 
 async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u64, blob: Vec<u8>) -> Result<(), ApiError> {
     let mut rt = s.cases_rt.lock().await;
-    let Some(mut c) = records(s).into_iter().find(|c| c.read_id == read_id) else { return Ok(()) };
+    let Some(mut c) = records(s).into_iter().find(|c| c.read_id == read_id) else {
+        // Not a case: maybe a group chat.
+        drop(rt);
+        return crate::groups::on_group(agent, s, read_id, seq, blob).await;
+    };
     if seq < c.next_seq {
         return Ok(());
     }
@@ -296,14 +303,14 @@ async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u64, b
         }
         Some(Processed::Commit { added, removed }) => {
             for a in added {
-                add_entry(s, &c, "Sotto", EntryKind::System(format!("{} joined the case.", String::from_utf8_lossy(&a))), None)?;
+                add_entry(s, &c, "Sotto", EntryKind::System(format!("{} joined the project.", String::from_utf8_lossy(&a))), None)?;
             }
             for r in removed {
-                add_entry(s, &c, "Sotto", EntryKind::System(format!("{} was removed from the case.", String::from_utf8_lossy(&r))), None)?;
+                add_entry(s, &c, "Sotto", EntryKind::System(format!("{} was removed from the project.", String::from_utf8_lossy(&r))), None)?;
             }
             if !rt.mls.as_ref().map(|m| m.is_active(&c.group_id)).unwrap_or(false) {
                 c.removed = true;
-                add_entry(s, &c, "Sotto", EntryKind::System("You were removed from this case. You can still read what you had.".into()), None)?;
+                add_entry(s, &c, "Sotto", EntryKind::System("You were removed from this project. You can still read what you had.".into()), None)?;
             }
         }
         _ => {}
@@ -333,6 +340,9 @@ async fn handle_extension(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, pay
             s.engine.send_payload(&contact, &Payload::KeyPackage { case_id, data: kp }).await?;
         }
         Payload::KeyPackage { case_id, data } => {
+            if s.cases.get::<CaseRecord>(&case_key(&case_id))?.is_none() {
+                return crate::groups::on_key_package(agent, s, contact, case_id, data).await;
+            }
             let mut rt = s.cases_rt.lock().await;
             let mut c = record(s, &case_id)?;
             let Some(i) = c.members.iter().position(|m| m.pending && m.contact_id == Some(contact)) else { return Ok(()) };
@@ -360,7 +370,7 @@ async fn handle_extension(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, pay
             }
             let mut rt = s.cases_rt.lock().await;
             ensure_mls(s, &mut rt).await?;
-            let group_id = rt.mls.as_ref().ok_or(ApiError::Internal)?.join(&welcome).map_err(|_| ApiError::Invalid("The case invitation couldn't be opened.".into()))?;
+            let group_id = rt.mls.as_ref().ok_or(ApiError::Internal)?.join(&welcome).map_err(|_| ApiError::Invalid("The project invitation couldn't be opened.".into()))?;
             persist_mls(s, &rt)?;
             let c = CaseRecord {
                 id: case_id,
@@ -382,10 +392,16 @@ async fn handle_extension(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, pay
                 owner_key,
             };
             save(s, &c)?;
-            add_entry(s, &c, "Sotto", EntryKind::System("You joined this case.".into()), None)?;
+            add_entry(s, &c, "Sotto", EntryKind::System("You joined this project.".into()), None)?;
             subscribe(s, &mut rt, &c).await;
             agent.emit(json!({ "type": "case", "id": hex(&c.id) }));
         }
+        Payload::GroupInvite { group_id, title, welcome, relay, read_id, write_id, owner_key } => {
+            crate::groups::on_invite(agent, s, contact, group_id, title, welcome, relay, read_id, write_id, owner_key).await?;
+        }
+        Payload::Channel(signal) => crate::channels::on_signal(agent, s, contact, signal).await?,
+        p @ (Payload::Secret { .. } | Payload::SecretOpened { .. }) => crate::secrets::on_payload(agent, s, contact, p)?,
+        Payload::Avatar { id } => crate::avatars::on_payload(agent, s, contact, id)?,
         Payload::InsuranceGrant { case_title, relay, read_id, deadline, key, chunks } => {
             s.engine.check_remote_relay(&relay)?;
             let g = Grant { id: new_id(), from: contact, case_title: case_title.chars().take(120).collect(), relay, read_id, key, deadline, chunks: chunks.min(4096), received_at: time::now() };
@@ -409,9 +425,9 @@ async fn handle_extension(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, pay
 
 fn retention_text(destroy_at: Option<u64>, hold: bool) -> String {
     match (destroy_at, hold) {
-        (_, true) => "Legal hold is on: nothing in this case will be destroyed automatically.".into(),
-        (Some(_), false) => "A destroy date was set for this case.".into(),
-        (None, false) => "Automatic destruction was turned off for this case.".into(),
+        (_, true) => "Legal hold is on: nothing in this project will be destroyed automatically.".into(),
+        (Some(_), false) => "A destroy date was set for this project.".into(),
+        (None, false) => "Automatic destruction was turned off for this project.".into(),
     }
 }
 
@@ -441,7 +457,7 @@ async fn destroy_local(agent: &Arc<Agent>, s: &Session, id: &Id) -> Result<(), A
 async fn setup_insurance(agent: &Arc<Agent>, s: &Arc<Session>, id: &Id, interval_days: u32, recipients: Vec<Id>) -> Result<(), ApiError> {
     let mut c = record(s, id)?;
     if !c.owner {
-        return Err(ApiError::Invalid("Only the case owner can set up an insurance file.".into()));
+        return Err(ApiError::Invalid("Only the project owner can set up an insurance file.".into()));
     }
     if recipients.is_empty() {
         return Err(ApiError::Invalid("Choose at least one colleague to hold it.".into()));
@@ -579,7 +595,7 @@ async fn create(State(agent): A, Json(b): Json<CreateIn>) -> R {
     let s = agent.session().await?;
     let title: String = b.title.trim().chars().take(120).collect();
     if title.is_empty() {
-        return Err(ApiError::Invalid("Give the case a working title.".into()));
+        return Err(ApiError::Invalid("Give the project a working title.".into()));
     }
     let mut rt = s.cases_rt.lock().await;
     ensure_mls(&s, &mut rt).await?;
@@ -611,7 +627,7 @@ async fn create(State(agent): A, Json(b): Json<CreateIn>) -> R {
         owner_key: rt.mls.as_ref().ok_or(ApiError::Internal)?.signature_key(),
     };
     save(&s, &c)?;
-    add_entry(&s, &c, &me, EntryKind::System("Case opened.".into()), None)?;
+    add_entry(&s, &c, &me, EntryKind::System("Project opened.".into()), None)?;
     subscribe(&s, &mut rt, &c).await;
     agent.emit(json!({ "type": "case", "id": hex(&c.id) }));
     Ok(Json(case_json(&c)))
@@ -637,7 +653,7 @@ async fn update(State(agent): A, Path(id): Path<String>, Json(b): Json<UpdateIn>
     let s = agent.session().await?;
     let mut c = record(&s, &cid(&id)?)?;
     if !c.owner {
-        return Err(ApiError::Invalid("Only the case owner can change retention.".into()));
+        return Err(ApiError::Invalid("Only the project owner can change retention.".into()));
     }
     if let Some(d) = b.destroy_in_days {
         c.destroy_at = if d == 0 { None } else { Some(time::now() + d.min(3650) as u64 * 86_400) };
@@ -680,7 +696,7 @@ async fn note(State(agent): A, Path(id): Path<String>, Json(b): Json<NoteIn>) ->
     }
     let mut c = record(&s, &cid(&id)?)?;
     if c.removed {
-        return Err(ApiError::Invalid("You're no longer a member of this case.".into()));
+        return Err(ApiError::Invalid("You're no longer a member of this project.".into()));
     }
     let nid = new_id();
     {
@@ -703,7 +719,7 @@ async fn source(State(agent): A, Path(id): Path<String>, Json(b): Json<SourceIn>
     let s = agent.session().await?;
     let alias: String = b.alias.trim().chars().take(80).collect();
     if alias.is_empty() {
-        return Err(ApiError::Invalid("Give the source a pseudonym, never their real name.".into()));
+        return Err(ApiError::Invalid("Give them a pseudonym, never their real name.".into()));
     }
     let mut c = record(&s, &cid(&id)?)?;
     let sid = new_id();
@@ -727,10 +743,10 @@ async fn invite(State(agent): A, Path(id): Path<String>, Json(b): Json<InviteIn>
     let s = agent.session().await?;
     let mut c = record(&s, &cid(&id)?)?;
     if !c.owner {
-        return Err(ApiError::Invalid("Only the case owner can add people.".into()));
+        return Err(ApiError::Invalid("Only the project owner can add people.".into()));
     }
     if b.role == Role::Owner {
-        return Err(ApiError::Invalid("A case has one owner.".into()));
+        return Err(ApiError::Invalid("A project has one owner.".into()));
     }
     let contact = cid(&b.contact_id)?;
     let view = s.engine.contact(&contact).await.ok_or(ApiError::NotFound)?;
@@ -738,7 +754,7 @@ async fn invite(State(agent): A, Path(id): Path<String>, Json(b): Json<InviteIn>
         return Err(ApiError::Invalid("They need to accept your conversation invite first.".into()));
     }
     if c.members.iter().any(|m| m.contact_id == Some(contact)) {
-        return Err(ApiError::Invalid("They're already in this case.".into()));
+        return Err(ApiError::Invalid("They're already in this project.".into()));
     }
     let name = if !view.their_name.is_empty() { view.their_name.clone() } else { view.nickname.clone() };
     c.members.push(Member { name, contact_id: Some(contact), role: b.role, pending: true });
@@ -754,7 +770,7 @@ async fn remove(State(agent): A, Path((id, name)): Path<(String, String)>) -> R 
     let s = agent.session().await?;
     let mut c = record(&s, &cid(&id)?)?;
     if !c.owner {
-        return Err(ApiError::Invalid("Only the case owner can remove people.".into()));
+        return Err(ApiError::Invalid("Only the project owner can remove people.".into()));
     }
     let Some(i) = c.members.iter().position(|m| m.name == name && m.role != Role::Owner) else { return Err(ApiError::NotFound) };
     let m = c.members.remove(i);
@@ -768,7 +784,7 @@ async fn remove(State(agent): A, Path((id, name)): Path<(String, String)>) -> R 
         broadcast(&s, &rt, &mut c, &CaseMsg::Members(list)).await?;
         persist_mls(&s, &rt)?;
     }
-    add_entry(&s, &c, &my_name(&s).await, EntryKind::System(format!("{} was removed from the case.", m.name)), None)?;
+    add_entry(&s, &c, &my_name(&s).await, EntryKind::System(format!("{} was removed from the project.", m.name)), None)?;
     save(&s, &c)?;
     show(State(agent), Path(id)).await
 }

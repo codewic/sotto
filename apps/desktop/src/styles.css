@@ -2,10 +2,27 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
-/* Light and dark both follow the system unless the user picks one (data-theme on <html>). */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/*
+ * Theming. Every value a screen uses comes from these tokens. The theme engine
+ * (src/theme/appearance.ts) sets data attributes on <html>; the same attributes on any
+ * element scope a full theme to it, which is how the theme and wallpaper previews render
+ * real tokens instead of pictures.
+ *
+ *   data-theme      light | soft | dim | dark | midnight   neutral scale
+ *   data-scheme     light | dark                            picks the accent's values
+ *   data-accent     violet | blue | teal | green | amber | rose | graphite
+ *   data-bubbles    ink | accent | tint                     your own messages
+ *   data-wallpaper  none | notebook | graph | dots | waves | contours | desk | tint
+ *   data-density    comfortable | compact
+ *   data-contrast   more                                    (absent = normal)
+ *   data-motion     reduce                                  (absent = follow system)
+ */
+@custom-variant dark (&:where([data-scheme="dark"], [data-scheme="dark"] *));
 
-:root {
+/* ---------- Neutral scales ---------- */
+
+:root,
+[data-theme="light"] {
   --background: #f3f3f3;
   --pane: #ffffff;
   --foreground: #171717;
@@ -13,15 +30,11 @@
   --muted-strong: #e8e8e8;
   --muted-foreground: #5c5c5c;
   --line: #e6e6e6;
-  --primary: #5b47c7;
-  --primary-foreground: #ffffff;
   --destructive: #c4302b;
   --destructive-foreground: #ffffff;
-  --mark-deep: #4a37b8;
-  --mark-light: #c9bfff;
-  --mark-mid: #8a78ec;
   --shadow-pane: 0 1px 2px rgb(0 0 0 / 0.05), 0 1px 1px rgb(0 0 0 / 0.03);
   --shadow-float: 0 8px 24px -6px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.06);
+  --shadow-bubble: 0 1px 1px rgb(0 0 0 / 0.06);
   --z-dropdown: 10;
   --z-sticky: 20;
   --z-backdrop: 40;
@@ -31,29 +44,41 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --background: #0b0b0c;
-    --pane: #161617;
-    --foreground: #ededed;
-    --muted: #1f1f21;
-    --muted-strong: #29292c;
-    --muted-foreground: #a6a6a6;
-    --line: #2a2a2d;
-    --primary: #a896ff;
-    --primary-foreground: #15121f;
-    --destructive: #ff7a72;
-    --destructive-foreground: #1f0d0c;
-    --mark-deep: #5440cf;
-    --mark-light: #d6ceff;
-    --mark-mid: #9a89f5;
-    --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.03);
-    --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.4);
-    color-scheme: dark;
-  }
+/* Soft: the light theme with the glare taken off, for long days under office lights. */
+[data-theme="soft"] {
+  --background: #e7e7ea;
+  --pane: #f5f5f7;
+  --foreground: #1c1c1f;
+  --muted: #eaeaed;
+  --muted-strong: #dfdfe3;
+  --muted-foreground: #56565d;
+  --line: #dcdce0;
+  --destructive: #b82c27;
+  --destructive-foreground: #ffffff;
+  --shadow-pane: 0 1px 2px rgb(0 0 0 / 0.05), 0 1px 1px rgb(0 0 0 / 0.03);
+  --shadow-float: 0 8px 24px -6px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.07);
+  --shadow-bubble: 0 1px 1px rgb(0 0 0 / 0.06);
+  color-scheme: light;
 }
 
-:root[data-theme="dark"] {
+/* Dim: lifted greys. Dark without the heavy black, easiest for long reading. */
+[data-theme="dim"] {
+  --background: #16171a;
+  --pane: #202125;
+  --foreground: #e8e8ea;
+  --muted: #2a2b30;
+  --muted-strong: #35363c;
+  --muted-foreground: #a4a5ac;
+  --line: #34353b;
+  --destructive: #ff7d75;
+  --destructive-foreground: #1f0d0c;
+  --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.03);
+  --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.35);
+  --shadow-bubble: 0 1px 1px rgb(0 0 0 / 0.25);
+  color-scheme: dark;
+}
+
+[data-theme="dark"] {
   --background: #0b0b0c;
   --pane: #161617;
   --foreground: #ededed;
@@ -61,16 +86,227 @@
   --muted-strong: #29292c;
   --muted-foreground: #a6a6a6;
   --line: #2a2a2d;
-  --primary: #a896ff;
-  --primary-foreground: #15121f;
   --destructive: #ff7a72;
   --destructive-foreground: #1f0d0c;
-  --mark-deep: #5440cf;
-  --mark-light: #d6ceff;
-  --mark-mid: #9a89f5;
   --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.03);
   --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.4);
+  --shadow-bubble: 0 1px 1px rgb(0 0 0 / 0.3);
   color-scheme: dark;
+}
+
+/* Midnight: true black and softer text. The screen gives off as little light as possible,
+   for working in a dark room or anywhere a glowing face draws attention. */
+[data-theme="midnight"] {
+  --background: #000000;
+  --pane: #0a0a0a;
+  --foreground: #d6d6d6;
+  --muted: #151515;
+  --muted-strong: #1e1e1e;
+  --muted-foreground: #919191;
+  --line: #1c1c1c;
+  --destructive: #f0706a;
+  --destructive-foreground: #1a0a09;
+  --shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.04);
+  --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 12px 32px -8px rgb(0 0 0 / 0.8);
+  --shadow-bubble: none;
+  color-scheme: dark;
+}
+
+/* ---------- Accents: tuned per scheme, text contrast at least 4.5:1 ---------- */
+
+:root,
+[data-accent="violet"] {
+  --primary: #5b47c7;
+  --primary-foreground: #ffffff;
+  --mark-deep: #4a37b8;
+  --mark-mid: #8a78ec;
+  --mark-light: #c9bfff;
+}
+[data-scheme="dark"],
+[data-scheme="dark"][data-accent="violet"] {
+  --primary: #a896ff;
+  --primary-foreground: #15121f;
+  --mark-deep: #5440cf;
+  --mark-mid: #9a89f5;
+  --mark-light: #d6ceff;
+}
+[data-accent="blue"] {
+  --primary: #2160d8;
+  --primary-foreground: #ffffff;
+  --mark-deep: #1a4fb8;
+  --mark-mid: #5b8ff0;
+  --mark-light: #bcd3ff;
+}
+[data-scheme="dark"][data-accent="blue"] {
+  --primary: #7eaaff;
+  --primary-foreground: #0b1428;
+  --mark-deep: #2f5fd0;
+  --mark-mid: #6b9cf7;
+  --mark-light: #cfe0ff;
+}
+[data-accent="teal"] {
+  --primary: #08777f;
+  --primary-foreground: #ffffff;
+  --mark-deep: #06656c;
+  --mark-mid: #2fb3bb;
+  --mark-light: #b5ecef;
+}
+[data-scheme="dark"][data-accent="teal"] {
+  --primary: #4fd1d9;
+  --primary-foreground: #04191b;
+  --mark-deep: #1a9aa2;
+  --mark-mid: #3cc0c8;
+  --mark-light: #c4f3f5;
+}
+[data-accent="green"] {
+  --primary: #1f7a3e;
+  --primary-foreground: #ffffff;
+  --mark-deep: #17602f;
+  --mark-mid: #3fa866;
+  --mark-light: #bfe9cd;
+}
+[data-scheme="dark"][data-accent="green"] {
+  --primary: #62d38c;
+  --primary-foreground: #06190d;
+  --mark-deep: #2a9a55;
+  --mark-mid: #4cbf78;
+  --mark-light: #ccf2d9;
+}
+[data-accent="amber"] {
+  --primary: #a3560b;
+  --primary-foreground: #ffffff;
+  --mark-deep: #864509;
+  --mark-mid: #d0802a;
+  --mark-light: #f7d9b0;
+}
+[data-scheme="dark"][data-accent="amber"] {
+  --primary: #f2b35b;
+  --primary-foreground: #241603;
+  --mark-deep: #c47f1f;
+  --mark-mid: #e09a3c;
+  --mark-light: #fbe4c4;
+}
+[data-accent="rose"] {
+  --primary: #c0365e;
+  --primary-foreground: #ffffff;
+  --mark-deep: #9f2a4c;
+  --mark-mid: #e06488;
+  --mark-light: #f8c4d3;
+}
+[data-scheme="dark"][data-accent="rose"] {
+  --primary: #ff8fae;
+  --primary-foreground: #2a0a13;
+  --mark-deep: #d1557a;
+  --mark-mid: #ec7799;
+  --mark-light: #ffd3df;
+}
+/* Graphite: no colour at all, so nothing on screen draws the eye from across a room. */
+[data-accent="graphite"] {
+  --primary: #3f3f46;
+  --primary-foreground: #ffffff;
+  --mark-deep: #27272a;
+  --mark-mid: #71717a;
+  --mark-light: #d4d4d8;
+}
+[data-scheme="dark"][data-accent="graphite"] {
+  --primary: #d4d4d8;
+  --primary-foreground: #18181b;
+  --mark-deep: #71717a;
+  --mark-mid: #a1a1aa;
+  --mark-light: #e4e4e7;
+}
+
+/* ---------- Increased contrast: derived from the active scale ---------- */
+
+[data-contrast="more"] {
+  --muted-foreground: color-mix(in oklab, var(--foreground) 84%, var(--pane));
+  --line: color-mix(in oklab, var(--foreground) 26%, var(--pane));
+  --muted: color-mix(in oklab, var(--foreground) 8%, var(--pane));
+  --muted-strong: color-mix(in oklab, var(--foreground) 15%, var(--pane));
+}
+
+/* ---------- Conversation surfaces ---------- */
+
+:root,
+[data-bubbles] {
+  --chat-bg: var(--pane);
+  --bubble-theirs: var(--muted);
+  --bubble-theirs-shadow: none;
+  --bubble-inset: var(--pane);
+  --composer: var(--muted);
+  --composer-shadow: none;
+  --wall-bg: color-mix(in oklab, var(--foreground) 4%, var(--pane));
+  --wall-ink: color-mix(in oklab, var(--foreground) 16%, var(--wall-bg));
+  --wall-accent: color-mix(in oklab, var(--primary) 34%, var(--wall-bg));
+}
+[data-scheme="dark"],
+[data-scheme="dark"][data-bubbles] {
+  /* In the dark the chat sinks below the pane, so messages can rise above it. */
+  --wall-bg: color-mix(in oklab, var(--background) 55%, var(--pane));
+  --wall-ink: color-mix(in oklab, var(--foreground) 12%, var(--wall-bg));
+  --wall-accent: color-mix(in oklab, var(--primary) 30%, var(--wall-bg));
+}
+/* With a wallpaper the chat sits on its own surface and the other side's messages lift off it. */
+[data-wallpaper]:not([data-wallpaper="none"]) {
+  --chat-bg: var(--wall-bg);
+  --bubble-theirs: var(--pane);
+  --bubble-theirs-shadow: var(--shadow-bubble);
+  --bubble-inset: var(--muted);
+  --composer: var(--pane);
+  --composer-shadow: var(--shadow-pane);
+}
+
+[data-scheme="dark"][data-wallpaper]:not([data-wallpaper="none"]) {
+  --bubble-theirs: var(--muted);
+  --bubble-inset: var(--pane);
+  --composer: var(--muted);
+}
+
+/* Your own messages. Ink is Sotto's default: a quiet dark bubble that never shouts. */
+:root,
+[data-bubbles="ink"] {
+  --bubble-mine: color-mix(in oklab, var(--mark-deep) 14%, #18181b);
+  --bubble-mine-fg: #ffffff;
+  --bubble-mine-muted: rgb(255 255 255 / 0.68);
+  --tick-read: var(--mark-light);
+}
+[data-scheme="dark"],
+[data-scheme="dark"][data-bubbles="ink"] {
+  --bubble-mine: color-mix(in oklab, var(--primary) 26%, var(--pane));
+  --bubble-mine-fg: color-mix(in oklab, var(--primary) 6%, #ffffff);
+  --bubble-mine-muted: color-mix(in oklab, var(--bubble-mine-fg) 66%, transparent);
+  --tick-read: var(--mark-light);
+}
+[data-bubbles="accent"],
+[data-scheme="dark"][data-bubbles="accent"] {
+  --bubble-mine: var(--primary);
+  --bubble-mine-fg: var(--primary-foreground);
+  --bubble-mine-muted: color-mix(in oklab, var(--primary-foreground) 92%, transparent);
+  --tick-read: var(--primary-foreground);
+}
+[data-bubbles="tint"],
+[data-scheme="dark"][data-bubbles="tint"] {
+  --bubble-mine: color-mix(in oklab, var(--primary) 15%, var(--pane));
+  --bubble-mine-fg: var(--foreground);
+  --bubble-mine-muted: var(--muted-foreground);
+  --tick-read: var(--primary);
+}
+
+/* ---------- Density and text size ---------- */
+
+:root,
+[data-density="comfortable"] {
+  --msg-size: 14.5px;
+  --bubble-px: 14px;
+  --bubble-py: 8px;
+  --run-gap: 12px;
+  --row-py: 8px;
+}
+[data-density="compact"] {
+  --bubble-px: 11px;
+  --bubble-py: 4px;
+  --run-gap: 6px;
+  --row-py: 4px;
 }
 
 @theme inline {
@@ -307,4 +543,142 @@ dialog.sotto-dialog[open] > .dialog-card {
   .mark-draw path {
     stroke-dashoffset: 0;
   }
+}
+
+/* Reduce motion chosen in Appearance, whatever the system says. */
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+[data-motion="reduce"] .mark-draw path {
+  stroke-dashoffset: 0;
+}
+
+/* Theme changes: the new theme opens out from where you clicked (driven from appearance.ts). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  z-index: 1;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* Privacy screen: in High risk and Extreme modes message text blurs while Sotto is in the background. */
+.privacy-active .privacy-content {
+  filter: blur(14px);
+  transition: filter 150ms var(--ease-smooth);
+}
+.privacy-content {
+  transition: filter 150ms var(--ease-smooth);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Call window: the ring around the other person pulses while calling and grows when they speak. */
+.call-ring {
+  opacity: 0;
+  transform: scale(0.86);
+  transition:
+    transform 220ms var(--ease-smooth),
+    opacity 220ms var(--ease-smooth);
+}
+.call-ring.is-speaking {
+  opacity: 1;
+  transform: scale(1.06);
+}
+.call-ring.is-calling {
+  animation: call-pulse 2.4s ease-in-out infinite;
+}
+@keyframes call-pulse {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* Channel art: waves leave the source on hover; the empty-state spot breathes on a slow loop. */
+.broadcast-glyph .wave-1,
+.broadcast-glyph .wave-2 {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transition: transform 220ms var(--ease-smooth), opacity 220ms var(--ease-smooth);
+}
+button:hover .broadcast-glyph .wave-1 {
+  transform: translateX(0.6px) scale(1.06);
+}
+button:hover .broadcast-glyph .wave-2 {
+  transform: translateX(1px) scale(1.1);
+  opacity: 0.8;
+}
+.broadcast-spot .spot-wave-1,
+.broadcast-spot .spot-wave-2 {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: spot-wave 4.8s var(--ease-smooth) infinite;
+}
+.broadcast-spot .spot-wave-2 {
+  animation-delay: 0.6s;
+}
+@keyframes spot-wave {
+  0%, 100% { opacity: 0.35; transform: translateX(0); }
+  40% { opacity: 1; transform: translateX(3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .broadcast-spot .spot-wave-1,
+  .broadcast-spot .spot-wave-2 { animation: none; }
+  button:hover .broadcast-glyph .wave-1,
+  button:hover .broadcast-glyph .wave-2 { transform: none; }
+}
+
+/* Code in messages. Mixed from the text colour around it, so every theme and both bubble colours
+   keep the contrast; only the hue is suggested. */
+:root {
+  --code-bg: color-mix(in srgb, currentColor 8%, transparent);
+  --code-kw: color-mix(in oklab, currentColor 35%, var(--primary));
+  --code-str: color-mix(in oklab, currentColor 45%, #2f9e6a);
+  --code-num: color-mix(in oklab, currentColor 45%, #c47a1c);
+  --code-com: color-mix(in srgb, currentColor 55%, transparent);
+  --code-fn: color-mix(in oklab, currentColor 45%, #3b7fd1);
+  --code-type: color-mix(in oklab, currentColor 50%, #b5508f);
+}
+
+/* Default avatars: lightness and chroma per theme; the hue comes from each person's seed. */
+:root {
+  --av-bg-l: 90%;
+  --av-bg-c: 0.055;
+  --av-mid-l: 72%;
+  --av-mid-c: 0.12;
+  --av-fg-l: 50%;
+  --av-fg-c: 0.15;
+}
+[data-theme="dim"],
+[data-theme="dark"],
+[data-theme="midnight"] {
+  --av-bg-l: 34%;
+  --av-bg-c: 0.07;
+  --av-mid-l: 56%;
+  --av-mid-c: 0.11;
+  --av-fg-l: 80%;
+  --av-fg-c: 0.12;
 }

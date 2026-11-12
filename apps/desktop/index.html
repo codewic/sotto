@@ -7,13 +7,12 @@
     <meta name="referrer" content="no-referrer" />
     <title>Sotto</title>
     <style id="splash-style">
-      #splash { position: fixed; inset: 0; display: grid; place-items: center; background: #f5f5f5; z-index: 9999; transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1); }
-      @media (prefers-color-scheme: dark) { #splash { background: #0c0c0d; } }
-      #splash svg path { stroke: #5b47c7; stroke-dasharray: 120; stroke-dashoffset: 120; animation: splash-draw 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite alternate; }
-      @media (prefers-color-scheme: dark) { #splash svg path { stroke: #a896ff; } }
+      #splash { position: fixed; inset: 0; display: grid; place-items: center; background: var(--splash-bg, #f3f3f3); z-index: 9999; transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+      #splash svg path { stroke: var(--splash-ink, #5b47c7); stroke-dasharray: 120; stroke-dashoffset: 120; animation: splash-draw 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite alternate; }
       @keyframes splash-draw { to { stroke-dashoffset: 0; } }
       @media (prefers-reduced-motion: reduce) { #splash svg path { animation: none; stroke-dashoffset: 0; } }
     </style>
+    <script src="./splash.js"></script>
   </head>
   <body>
     <div id="splash" aria-hidden="true">
@@ -22,7 +21,6 @@
       </svg>
     </div>
     <div id="root"></div>
-    <script src="./splash.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

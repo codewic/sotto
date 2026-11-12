@@ -55,6 +55,14 @@ pub struct Contact {
     pub unread: u32,
     pub invite_id: Option<Id>,
     pub invite_expires: u64,
+    pub pinned: bool,
+    pub archived: bool,
+    /// Send read receipts to this contact. Off by default: they reveal when you are active.
+    pub read_receipts: bool,
+    /// Chat-list preview of the latest message (local only).
+    pub preview: String,
+    pub preview_at: u64,
+    pub preview_outgoing: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -125,6 +133,17 @@ pub struct Message {
     pub expires_at: Option<u64>,
     pub delivery: Delivery,
     pub remote_file: Option<FileRef>,
+    pub reply_to: Option<Id>,
+    pub reactions: Vec<Reaction>,
+    pub edited: bool,
+    /// Incoming: this desk has read it. Outgoing: the other side sent a read receipt.
+    pub read: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reaction {
+    pub emoji: String,
+    pub mine: bool,
 }
 
 impl Message {
@@ -162,6 +181,12 @@ pub struct ContactView {
     pub safety_number: Option<String>,
     pub their_fingerprint: Option<String>,
     pub invite_expires: Option<u64>,
+    pub pinned: bool,
+    pub archived: bool,
+    pub read_receipts: bool,
+    pub preview: String,
+    pub preview_at: u64,
+    pub preview_outgoing: bool,
 }
 
 impl Contact {
@@ -185,6 +210,12 @@ impl Contact {
                 .map(|t| sotto_core::safety::safety_number(&self.my_identity.public().sign, &t.sign)),
             their_fingerprint: self.their_identity.map(|t| t.fingerprint()),
             invite_expires: (self.state == ContactState::Invited).then_some(self.invite_expires),
+            pinned: self.pinned,
+            archived: self.archived,
+            read_receipts: self.read_receipts,
+            preview: self.preview.clone(),
+            preview_at: self.preview_at,
+            preview_outgoing: self.preview_outgoing,
         }
     }
 }
@@ -230,9 +261,29 @@ pub struct MessageView {
     pub received_at: u64,
     pub expires_at: Option<u64>,
     pub delivery: Delivery,
+    pub reply_to: Option<String>,
+    pub reactions: Vec<ReactionView>,
+    pub edited: bool,
+    pub read: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ReactionView {
+    pub emoji: String,
+    pub count: u32,
+    pub mine: bool,
 }
 
 impl Message {
+    /// One line for chat-list previews.
+    pub fn preview(&self) -> String {
+        let t = match &self.body {
+            Body::Text(t) | Body::System(t) => t.clone(),
+            Body::File { meta, .. } => format!("File: {}", meta.name),
+        };
+        t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()
+    }
+
     pub fn view(&self) -> MessageView {
         let (kind, text, file) = match &self.body {
             Body::Text(t) => ("text", Some(t.clone()), None),
@@ -261,6 +312,22 @@ impl Message {
             received_at: self.received_at,
             expires_at: self.expires_at,
             delivery: self.delivery,
+            reply_to: self.reply_to.map(|r| hex(&r)),
+            reactions: {
+                let mut v: Vec<ReactionView> = Vec::new();
+                for r in &self.reactions {
+                    match v.iter_mut().find(|x| x.emoji == r.emoji) {
+                        Some(x) => {
+                            x.count += 1;
+                            x.mine |= r.mine;
+                        }
+                        None => v.push(ReactionView { emoji: r.emoji.clone(), count: 1, mine: r.mine }),
+                    }
+                }
+                v
+            },
+            edited: self.edited,
+            read: self.read,
         }
     }
 }

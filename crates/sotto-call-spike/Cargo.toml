@@ -1,0 +1,16 @@
+[package]
+name = "sotto-call-spike"
+description = "Phase 0 of docs/calls.md: measures device-hosted, constant-rate voice over real Tor onion services. Throwaway."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+sotto-core = { path = "../sotto-core" }
+base64 = "0.23.1"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "time", "sync", "io-util", "process", "fs"] }
+tokio-socks = "0.5.3"
+serde_json = "1"

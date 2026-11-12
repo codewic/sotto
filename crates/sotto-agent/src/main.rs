@@ -14,6 +14,8 @@ fn fail(msg: &str) -> ! {
 }
 
 fn main() {
+    // HTTPS (the call broker) uses rustls with the ring provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut data: Option<PathBuf> = None;
     let mut socket: Option<PathBuf> = None;
     let mut listen: Option<String> = None;
@@ -53,11 +55,13 @@ fn main() {
             let _ = std::fs::remove_file(&path);
             let listener = tokio::net::UnixListener::bind(&path).unwrap_or_else(|e| fail(&format!("can't bind socket: {e}")));
             restrict(&path);
+            let _ = agent.endpoint.set(format!("unix:{}", std::path::Path::new(&path).canonicalize().unwrap_or_else(|_| path.clone().into()).display()));
             println!("SOTTO_AGENT_READY {token}");
             axum::serve(listener, app).with_graceful_shutdown(shutdown).await.unwrap_or_else(|e| fail(&e.to_string()));
         } else {
             let addr = listen.unwrap_or_else(|| fail("--socket or --listen is required"));
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| fail(&format!("can't listen on {addr}: {e}")));
+            let _ = agent.endpoint.set(format!("http://{addr}"));
             println!("SOTTO_AGENT_READY {token}");
             axum::serve(listener, app).with_graceful_shutdown(shutdown).await.unwrap_or_else(|e| fail(&e.to_string()));
         }

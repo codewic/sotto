@@ -27,12 +27,33 @@ export function App() {
           case "contacts":
           case "contact":
             qc.invalidateQueries({ queryKey: ["contacts"] });
+            qc.invalidateQueries({ queryKey: ["tag"] });
             break;
           case "message":
           case "message_removed":
             qc.invalidateQueries({ queryKey: ["messages", e.contact_id] });
             qc.invalidateQueries({ queryKey: ["contacts"] });
             qc.invalidateQueries({ queryKey: ["files"] });
+            break;
+          case "group":
+            qc.invalidateQueries({ queryKey: ["groups"] });
+            if (e.id) qc.invalidateQueries({ queryKey: ["group-messages", e.id] });
+            break;
+          case "channel":
+            qc.invalidateQueries({ queryKey: ["channels"] });
+            if (e.id) {
+              qc.invalidateQueries({ queryKey: ["channel-posts", e.id] });
+              qc.invalidateQueries({ queryKey: ["channel-replies", e.id] });
+            }
+            break;
+          case "me":
+            qc.invalidateQueries({ queryKey: ["me-avatar"] });
+            break;
+          case "secret":
+            if (e.contact_id) qc.invalidateQueries({ queryKey: ["secrets", e.contact_id] });
+            break;
+          case "call":
+            qc.invalidateQueries({ queryKey: ["calls"] });
             break;
           case "relay":
             qc.invalidateQueries({ queryKey: ["status"] });

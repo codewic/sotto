@@ -19,7 +19,27 @@ export default defineConfig({
         changeOrigin: true,
         headers: { authorization: `Bearer ${token}` },
       },
+      // Development: the other test desks, reachable from this one page (?desk=peer, ?desk=third).
+      "/desk/peer/api": {
+        target: "http://127.0.0.1:7802",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/desk\/peer/, ""),
+        headers: { authorization: `Bearer ${token}` },
+      },
+      "/desk/third/api": {
+        target: "http://127.0.0.1:7803",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/desk\/third/, ""),
+        headers: { authorization: `Bearer ${token}` },
+      },
     },
   },
-  build: { outDir: "dist", emptyOutDir: true, sourcemap: false },
+  // Two pages: the app, and the call window (its own page, so it can be the only one with a microphone).
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    sourcemap: false,
+    rollupOptions: { input: { main: "index.html", call: "call.html" } },
+  },
+  worker: { format: "es" },
 });

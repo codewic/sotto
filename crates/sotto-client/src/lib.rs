@@ -5,11 +5,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod calls;
 pub mod conn;
 pub mod engine;
 pub mod files;
 pub mod model;
 
+pub use calls::{CallView, JoinInfo, RoomGrant};
 pub use conn::{RelayConn, Status, Transport};
 pub use engine::{Engine, EngineConfig, Event};
 pub use model::*;

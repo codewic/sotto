@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ToastProvider } from "./ui/toast";
 import "./styles.css";
+import { stepZoom, toggleScheme } from "./theme/appearance";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,6 +16,28 @@ const queryClient = new QueryClient({
 function Root() {
   useEffect(() => {
     window.__SPLASH__?.hide();
+  }, []);
+  // Appearance keys work everywhere, the lock screen included.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (e.shiftKey && k === "l") {
+        e.preventDefault();
+        toggleScheme();
+      } else if (k === "=" || k === "+") {
+        e.preventDefault();
+        stepZoom(1);
+      } else if (k === "-" || k === "_") {
+        e.preventDefault();
+        stepZoom(-1);
+      } else if (k === "0" && !e.shiftKey) {
+        e.preventDefault();
+        stepZoom(0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
   return (
     <QueryClientProvider client={queryClient}>

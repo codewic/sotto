@@ -99,11 +99,11 @@ impl DropItem {
     }
 }
 
-/// "Source QV4": stable, short, and meaningless outside this desk.
+/// "Sender QV4": stable, short, and meaningless outside this device.
 pub fn pseudonym(source_id: &str) -> String {
     let d = kdf::sha256(source_id.as_bytes());
     const L: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
-    format!("Source {}{}{}", L[d[0] as usize % L.len()] as char, L[d[1] as usize % L.len()] as char, (d[2] % 9) + 1)
+    format!("Sender {}{}{}", L[d[0] as usize % L.len()] as char, L[d[1] as usize % L.len()] as char, (d[2] % 9) + 1)
 }
 
 fn account_name(id: &str) -> String {
@@ -168,7 +168,7 @@ pub fn item_key(drop: &str, source: &str, name: &str) -> String {
 pub fn create(store: &Store, name: &str, url: &str, newsroom: Option<SealSecret>) -> Result<DropAccount, ApiError> {
     let url = url.trim().trim_end_matches('/').to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(ApiError::Invalid("The drop address should start with http:// (onion addresses use http).".into()));
+        return Err(ApiError::Invalid("The inbox address should start with http:// (onion addresses use http).".into()));
     }
     let a = DropAccount {
         id: hex(&sotto_core::rand::bytes::<8>()),
@@ -200,12 +200,12 @@ async fn call(c: &reqwest::Client, a: &DropAccount, method: reqwest::Method, pat
         .body(body)
         .send()
         .await
-        .map_err(|_| ApiError::Unavailable("The drop can't be reached. Check that Tor is running and the address is right.".into()))?;
+        .map_err(|_| ApiError::Unavailable("The inbox server can't be reached. Check that Tor is running and the address is right.".into()))?;
     match res.status().as_u16() {
-        200..=299 => Ok(res.bytes().await.map_err(|_| ApiError::Unavailable("The drop connection dropped.".into()))?.to_vec()),
-        401 => Err(ApiError::Invalid("The drop doesn't recognise this desk. Add your journalist key to its configuration.".into())),
+        200..=299 => Ok(res.bytes().await.map_err(|_| ApiError::Unavailable("The connection to the inbox server dropped.".into()))?.to_vec()),
+        401 => Err(ApiError::Invalid("The inbox server doesn't recognise this device. Add this device's key to its configuration.".into())),
         404 => Err(ApiError::NotFound),
-        _ => Err(ApiError::Unavailable("The drop returned an error.".into())),
+        _ => Err(ApiError::Unavailable("The inbox server returned an error.".into())),
     }
 }
 
@@ -285,7 +285,7 @@ pub async fn reply(agent: &Arc<Agent>, s: &Arc<Session>, drop_id: &str, source: 
     let public: SealPublic = postcard::from_bytes(&key).map_err(|_| ApiError::Internal)?;
     // The source id is the hash of their key: a server that swaps the key would be caught here.
     if proto::source_id(&public) != source {
-        return Err(ApiError::Unavailable("The drop returned the wrong key for this source. Nothing was sent.".into()));
+        return Err(ApiError::Unavailable("The inbox server returned the wrong key for this sender. Nothing was sent.".into()));
     }
     let reply = proto::Reply { day: proto::today(), text: text.to_string() };
     let sealed = sotto_core::seal::seal(&public, &postcard::to_stdvec(&reply).map_err(|_| ApiError::Internal)?)?;
@@ -329,6 +329,6 @@ mod tests {
     fn pseudonyms_are_stable_and_short() {
         let a = super::pseudonym("0123456789abcdef0123456789abcdef");
         assert_eq!(a, super::pseudonym("0123456789abcdef0123456789abcdef"));
-        assert!(a.starts_with("Source ") && a.len() == 10);
+        assert!(a.starts_with("Sender ") && a.len() == 10);
     }
 }

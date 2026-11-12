@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The call window may reach the call server (wss/https) and nothing else; the app narrows
+         this further to the one call server in use. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self' wss: https: ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: mediastream:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Sotto call</title>
+    <script src="./splash.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/call/main.tsx"></script>
+  </body>
+</html>

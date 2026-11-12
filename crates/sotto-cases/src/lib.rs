@@ -164,6 +164,18 @@ impl Mls {
         Ok((commit.tls_serialize_detached().map_err(mls)?, welcome.tls_serialize_detached().map_err(mls)?))
     }
 
+    /// The identity (the name its owner chose) inside a key package, after checking its signature.
+    pub fn key_package_identity(&self, key_package: &[u8]) -> Result<Vec<u8>> {
+        let msg = MlsMessageIn::tls_deserialize_exact(key_package).map_err(|_| CaseError::Malformed)?;
+        match msg.extract() {
+            MlsMessageBodyIn::KeyPackage(kp) => {
+                let kp = kp.validate(self.provider.crypto(), ProtocolVersion::Mls10).map_err(mls)?;
+                Ok(identity_of(kp.leaf_node().credential()))
+            }
+            _ => Err(CaseError::Malformed),
+        }
+    }
+
     /// Remove members by identity. Returns the commit, already applied locally.
     pub fn remove_members(&self, group_id: &[u8], identities: &[Vec<u8>]) -> Result<Vec<u8>> {
         let mut group = self.load(group_id)?;
@@ -233,6 +245,11 @@ impl Mls {
         Ok(self.load(group_id)?.members().map(|m| identity_of(&m.credential)).collect())
     }
 
+    /// Each member's identity (chosen name) and MLS signature key.
+    pub fn member_keys(&self, group_id: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        Ok(self.load(group_id)?.members().map(|m| (identity_of(&m.credential), m.signature_key.clone())).collect())
+    }
+
     /// Whether this client is still in the group (false after being removed).
     pub fn is_active(&self, group_id: &[u8]) -> bool {
         self.load(group_id).map(|g| g.is_active()).unwrap_or(false)
@@ -263,6 +280,7 @@ mod tests {
         let r = editor.encrypt(&gid, b"Got it").unwrap();
         assert!(matches!(owner.process(&gid, &r, Some(&owner.signature_key())).unwrap(), Processed::Application { .. }));
 
+        assert_eq!(owner.key_package_identity(&lawyer.key_package().unwrap()).unwrap(), b"Cleo".to_vec());
         let (c2, w2) = owner.add_member(&gid, &lawyer.key_package().unwrap()).unwrap();
         assert_eq!(editor.process(&gid, &c2, Some(&owner.signature_key())).unwrap(), Processed::Commit { added: vec![b"Cleo".to_vec()], removed: vec![] });
         lawyer.join(&w2).unwrap();

@@ -1,0 +1,58 @@
+# Sotto call server: LiveKit (media), the call broker (join tokens) and Caddy (TLS).
+# Everything uses host networking: LiveKit needs its UDP ports on the host, and the broker and
+# LiveKit's signalling port are only reached through Caddy on 127.0.0.1. See README.md.
+name: sotto-calls
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.3
+    command: --config /etc/livekit.yaml
+    network_mode: host
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+      # Caddy's certificates, for TURN over TLS (optional step in README.md).
+      - caddy_data:/caddy:ro
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: &small-logs
+      driver: local
+      options: { max-size: "1m", max-file: "2" }
+
+  broker:
+    build:
+      context: ../..
+      dockerfile: deploy/calls/broker.Dockerfile
+    image: sotto-call-broker:local
+    network_mode: host
+    environment:
+      SOTTO_CALLS_URL: "wss://${CALLS_DOMAIN}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
+      BROKER_BIND: "127.0.0.1:7890"
+      BROKER_RATE_GLOBAL_PER_MIN: "${BROKER_RATE_GLOBAL_PER_MIN:-120}"
+      BROKER_RATE_IP_PER_MIN: "${BROKER_RATE_IP_PER_MIN:-20}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: *small-logs
+
+  caddy:
+    image: caddy:2-alpine
+    network_mode: host
+    environment:
+      CALLS_DOMAIN: "${CALLS_DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: *small-logs
+
+volumes:
+  caddy_data:
+  caddy_config:

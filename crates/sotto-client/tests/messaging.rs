@@ -54,13 +54,13 @@ async fn invite_chat_files_and_deletion() {
     assert_eq!(sa, sb);
 
     // Text both ways, with delivery receipts.
-    let sent = bob.send_text(&b_cid, "I have the contracts.").await.unwrap();
+    let sent = bob.send_text(&b_cid, "I have the contracts.", None).await.unwrap();
     until("alice receives", || async { alice.messages(&a_cid, 50).unwrap().iter().any(|m| m.text.as_deref() == Some("I have the contracts.")) }).await;
     until("bob sees delivered", || async {
         bob.messages(&b_cid, 50).unwrap().iter().any(|m| m.id == sent.id && m.delivery == sotto_client::Delivery::Delivered)
     })
     .await;
-    alice.send_text(&a_cid, "Thank you. Use the file button.").await.unwrap();
+    alice.send_text(&a_cid, "Thank you. Use the file button.", None).await.unwrap();
     until("bob receives reply", || async { bob.messages(&b_cid, 50).unwrap().iter().any(|m| !m.outgoing && m.kind == "text") }).await;
     assert_eq!(alice.contact(&a_cid).await.unwrap().unread, 1);
     alice.mark_read(&a_cid).await.unwrap();
@@ -114,14 +114,14 @@ async fn state_survives_restart_and_offline_messages_arrive() {
     // Alice goes away; Bob writes while she is offline.
     alice.shutdown().await;
     drop(alice);
-    bob.send_text(&b_cid, "while you were away").await.unwrap();
+    bob.send_text(&b_cid, "while you were away", None).await.unwrap();
 
     // Alice comes back with the same vault and gets the message.
     let alice = Engine::start(Arc::new(va.scope(key).unwrap()), EngineConfig { default_relay: url.clone(), transport: Transport::Direct })
         .await
         .unwrap();
     until("offline message", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.text.as_deref() == Some("while you were away")) }).await;
-    alice.send_text(&a_cid, "back").await.unwrap();
+    alice.send_text(&a_cid, "back", None).await.unwrap();
     until("bob gets reply", || async { bob.messages(&b_cid, 10).unwrap().iter().any(|m| m.text.as_deref() == Some("back")) }).await;
 }
 
@@ -136,7 +136,7 @@ async fn disappearing_messages_are_swept() {
     until("ready", || async { alice.contact(&a_cid).await.unwrap().state == "ready" }).await;
     bob.set_timer(&b_cid, Some(1)).await.unwrap();
     until("timer", || async { alice.contact(&a_cid).await.unwrap().ttl_secs == Some(1) }).await;
-    bob.send_text(&b_cid, "burn after reading").await.unwrap();
+    bob.send_text(&b_cid, "burn after reading", None).await.unwrap();
     until("received", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.kind == "text") }).await;
     tokio::time::sleep(Duration::from_millis(2100)).await;
     assert!(alice.sweep_expired().await.unwrap() >= 1);
@@ -203,12 +203,182 @@ async fn conversations_survive_a_relay_restart() {
 
     // Clients reconnect on their own and both directions still work.
     for _ in 0..100 {
-        if bob.send_text(&b_cid, "still here").await.is_ok() {
+        if bob.send_text(&b_cid, "still here", None).await.is_ok() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     until("alice gets it", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.text.as_deref() == Some("still here")) }).await;
-    alice.send_text(&a_cid, "me too").await.unwrap();
+    alice.send_text(&a_cid, "me too", None).await.unwrap();
     until("bob gets it", || async { bob.messages(&b_cid, 10).unwrap().iter().any(|m| m.text.as_deref() == Some("me too")) }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replies_reactions_edits_and_read_receipts() {
+    let url = relay().await;
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (alice, _va) = engine(da.path(), &url).await;
+    let (bob, _vb) = engine(db.path(), &url).await;
+    let (a_cid, link) = alice.create_invite("B", "", false).await.unwrap();
+    let b_cid = bob.accept_invite(&link, "A", "").await.unwrap();
+    until("ready", || async { alice.contact(&a_cid).await.unwrap().state == "ready" }).await;
+
+    let first = bob.send_text(&b_cid, "the meeting is tuesday", None).await.unwrap();
+    until("arrives", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.id == first.id) }).await;
+    assert_eq!(alice.contact(&a_cid).await.unwrap().preview, "the meeting is tuesday");
+
+    // Reply and react.
+    let fid = unhex::<16>(&first.id).unwrap();
+    alice.send_text(&a_cid, "which room?", Some(fid)).await.unwrap();
+    alice.react(&a_cid, &fid, "✅", true).await.unwrap();
+    until("reply and reaction arrive", || async {
+        let ms = bob.messages(&b_cid, 10).unwrap();
+        ms.iter().any(|m| m.reply_to.as_deref() == Some(first.id.as_str())) && ms.iter().any(|m| m.id == first.id && m.reactions.iter().any(|r| r.emoji == "✅" && !r.mine))
+    })
+    .await;
+
+    // Edit: only the author can, and the other side sees it.
+    assert!(alice.edit(&a_cid, &fid, "not mine").await.is_err());
+    bob.edit(&b_cid, &fid, "the meeting is wednesday").await.unwrap();
+    until("edit arrives", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.text.as_deref() == Some("the meeting is wednesday") && m.edited) }).await;
+
+    // Read receipts are off by default, and flow once turned on.
+    alice.mark_read(&a_cid).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!bob.messages(&b_cid, 10).unwrap().iter().any(|m| m.id == first.id && m.read));
+    let second = bob.send_text(&b_cid, "room 4", None).await.unwrap();
+    until("second", || async { alice.messages(&a_cid, 10).unwrap().iter().any(|m| m.id == second.id) }).await;
+    alice.set_read_receipts(&a_cid, true).await.unwrap();
+    alice.mark_read(&a_cid).await.unwrap();
+    until("read receipt", || async { bob.messages(&b_cid, 10).unwrap().iter().any(|m| m.id == second.id && m.read) }).await;
+}
+
+fn grant(tag: &str) -> sotto_client::RoomGrant {
+    sotto_client::RoomGrant { url: "wss://rtc.example.test".into(), room: format!("room-{tag}"), my_token: format!("caller-{tag}"), their_token: format!("callee-{tag}") }
+}
+
+fn texts(e: &Engine, cid: &[u8; 16]) -> Vec<String> {
+    e.messages(cid, 50).unwrap().into_iter().filter(|m| m.kind == "system").filter_map(|m| m.text).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn calls_ring_answer_end_and_leave_records() {
+    let url = relay().await;
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (alice, _va) = engine(da.path(), &url).await;
+    let (bob, _vb) = engine(db.path(), &url).await;
+    let (a_cid, link) = alice.create_invite("B", "", false).await.unwrap();
+    let b_cid = bob.accept_invite(&link, "A", "").await.unwrap();
+    until("ready", || async { alice.contact(&a_cid).await.unwrap().state == "ready" }).await;
+    let mut bob_events = bob.events();
+
+    // Alice calls: she can join straight away and waits in the room; Bob's side rings.
+    let call = alice.start_call(&a_cid, grant("1")).await.unwrap();
+    assert_eq!(call.phase, sotto_client::calls::Phase::Calling);
+    let cid = unhex::<16>(&call.id).unwrap();
+    let mine = alice.join_info(&cid).await.unwrap();
+    assert_eq!((mine.token.as_str(), mine.outgoing), ("caller-1", true));
+    assert!(alice.start_call(&a_cid, grant("x")).await.is_err(), "one call at a time");
+    until("bob rings", || async { bob.calls().await.iter().any(|c| c.id == call.id && c.phase == sotto_client::calls::Phase::Ringing) }).await;
+    assert!(bob.join_info(&cid).await.is_err(), "no join details before answering");
+
+    // Events carry no secrets.
+    let mut seen = String::new();
+    while let Ok(e) = bob_events.try_recv() {
+        seen.push_str(&serde_json::to_string(&e).unwrap());
+    }
+    assert!(seen.contains("ringing") && !seen.contains("callee-1") && !seen.contains("caller-1"), "{seen}");
+
+    // Bob answers and gets the other token and the same media key.
+    bob.answer_call(&cid).await.unwrap();
+    let theirs = bob.join_info(&cid).await.unwrap();
+    assert_eq!((theirs.token.as_str(), theirs.outgoing, theirs.url.as_str()), ("callee-1", false, "wss://rtc.example.test"));
+    assert_eq!(theirs.key, mine.key);
+    until("alice sees the answer", || async { alice.calls().await.iter().any(|c| c.phase == sotto_client::calls::Phase::Active) }).await;
+
+    // Bob hangs up: both sides end and keep a record.
+    bob.end_call(&cid).await.unwrap();
+    until("alice ends too", || async { alice.calls().await.is_empty() }).await;
+    assert!(alice.join_info(&cid).await.is_err(), "keys are gone after the call");
+    until("records", || async { texts(&alice, &a_cid).iter().any(|t| t.starts_with("Outgoing call, ")) && texts(&bob, &b_cid).iter().any(|t| t.starts_with("Incoming call, ")) }).await;
+
+    // An unanswered call rings out: "No answer" for the caller, an unread "Missed call" for the callee.
+    alice.set_ring_time(Duration::from_millis(1500)).await;
+    let unread_before = bob.contact(&b_cid).await.unwrap().unread;
+    let second = alice.start_call(&a_cid, grant("2")).await.unwrap();
+    until("bob rings again", || async { bob.calls().await.iter().any(|c| c.id == second.id) }).await;
+    until("rings out on both sides", || async { alice.calls().await.is_empty() && bob.calls().await.is_empty() }).await;
+    until("no answer and missed", || async { texts(&alice, &a_cid).contains(&"No answer".to_string()) && texts(&bob, &b_cid).contains(&"Missed call".to_string()) }).await;
+    assert_eq!(bob.contact(&b_cid).await.unwrap().unread, unread_before + 1);
+
+    // An explicit decline tells the caller; a cancelled call is a missed call for the callee.
+    alice.set_ring_time(Duration::from_secs(30)).await;
+    let third = alice.start_call(&a_cid, grant("3")).await.unwrap();
+    let tid = unhex::<16>(&third.id).unwrap();
+    until("rings", || async { bob.calls().await.iter().any(|c| c.id == third.id) }).await;
+    bob.decline_call(&tid, true).await.unwrap();
+    until("alice hears they couldn't talk", || async { texts(&alice, &a_cid).contains(&"They couldn't talk".to_string()) }).await;
+    assert!(texts(&bob, &b_cid).contains(&"Declined call".to_string()));
+
+    let fourth = alice.start_call(&a_cid, grant("4")).await.unwrap();
+    until("rings", || async { bob.calls().await.iter().any(|c| c.id == fourth.id) }).await;
+    alice.end_call(&unhex::<16>(&fourth.id).unwrap()).await.unwrap();
+    until("bob stops ringing", || async { bob.calls().await.is_empty() }).await;
+    assert!(texts(&alice, &a_cid).contains(&"Call cancelled".to_string()));
+    assert_eq!(texts(&bob, &b_cid).iter().filter(|t| *t == "Missed call").count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn people_can_be_added_to_a_call() {
+    use sotto_client::calls::Phase;
+    let url = relay().await;
+    let (da, db, dc) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (alice, _va) = engine(da.path(), &url).await;
+    let (bob, _vb) = engine(db.path(), &url).await;
+    let (cara, _vc) = engine(dc.path(), &url).await;
+    let (a_b, link) = alice.create_invite("Bob", "", false).await.unwrap();
+    let b_a = bob.accept_invite(&link, "Alice", "").await.unwrap();
+    let (a_c, link) = alice.create_invite("Cara", "", false).await.unwrap();
+    let c_a = cara.accept_invite(&link, "Alice", "").await.unwrap();
+    until("ready", || async { alice.contact(&a_b).await.unwrap().state == "ready" && alice.contact(&a_c).await.unwrap().state == "ready" }).await;
+
+    // Alice calls Bob; Bob answers.
+    let call = alice.start_call(&a_b, grant("g")).await.unwrap();
+    let id = unhex::<16>(&call.id).unwrap();
+    assert_eq!(alice.call_room(&id).await.unwrap(), ("wss://rtc.example.test".to_string(), "room-g".to_string()));
+    until("bob rings", || async { !bob.calls().await.is_empty() }).await;
+    bob.answer_call(&id).await.unwrap();
+    until("active", || async { alice.calls().await.iter().any(|c| c.phase == Phase::Active) }).await;
+
+    // Alice adds Cara with a token for the same room: Cara rings with a group invitation and the same key.
+    let v = alice.invite_to_call(&id, &a_c, "third-token".into()).await.unwrap();
+    assert!(v.group && v.invited.len() == 1);
+    assert!(alice.invite_to_call(&id, &a_c, "again".into()).await.is_err(), "no double invitations");
+    assert!(alice.invite_to_call(&id, &a_b, "again".into()).await.is_err(), "Bob is already in");
+    until("cara rings", || async { cara.calls().await.iter().any(|c| c.id == call.id && c.phase == Phase::Ringing && c.group) }).await;
+    assert_eq!(bob.call_room(&id).await.unwrap().1, "room-g", "anyone in the call can add people");
+    cara.answer_call(&id).await.unwrap();
+    let j = cara.join_info(&id).await.unwrap();
+    assert_eq!((j.token.as_str(), j.group), ("third-token", true));
+    assert_eq!(j.key, alice.join_info(&id).await.unwrap().key);
+
+    // Bob's call window sees two others and marks the call as a group call.
+    bob.mark_group_call(&id).await.unwrap();
+
+    // Cara leaves: Alice and Bob stay on.
+    cara.end_call(&id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(alice.calls().await.iter().any(|c| c.phase == Phase::Active), "one person leaving doesn't end a group call");
+    until("cara can be added again", || async { alice.calls().await.iter().any(|c| c.invited.is_empty()) }).await;
+
+    // Alice leaves: Bob stays on too (his window ends it when the room empties).
+    alice.end_call(&id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(bob.calls().await.iter().any(|c| c.phase == Phase::Active));
+    bob.end_call(&id).await.unwrap();
+
+    until("group call records", || async {
+        texts(&alice, &a_b).iter().any(|t| t.starts_with("Group call, ")) && texts(&bob, &b_a).iter().any(|t| t.starts_with("Group call, ")) && texts(&cara, &c_a).iter().any(|t| t.starts_with("Group call, "))
+    })
+    .await;
 }

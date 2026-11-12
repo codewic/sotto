@@ -25,13 +25,13 @@ An identity is a pair of long-term keys held only on the device:
 - `IK.sign`: Ed25519, signs invites and join transcripts.
 - `IK.dh`: X25519, used in the handshake.
 
-A user can hold many identities. Journalists normally have one *listed* identity (published through the outlet directory, see `docs/directory.md`) and any number of *unlisted* ones. Sources get a fresh identity per contact by default, so two journalists comparing notes cannot link the same source by key.
+A user can hold many identities. Members of an organization normally have one *listed* identity (published through the organization directory, see `docs/directory.md`) and any number of *unlisted* ones. Anonymous senders and other outside contacts get a fresh identity per conversation by default, so two members comparing notes cannot link the same person by key.
 
 **Safety number.** `SHA-512("sotto-safety-v1" || min(A.sign, B.sign) || max(A.sign, B.sign))`, first 40 bytes read as eight 5-byte big-endian integers, each `mod 100000`, shown as eight groups of five digits. Both sides see the same number.
 
 ## 3. Invites (out-of-band first contact)
 
-There is no user directory and no prekey server. First contact is a one-time invite passed out of band: QR code in person, a link through an existing channel, or a reply on a source drop.
+There is no user directory and no prekey server. First contact is a one-time invite passed out of band: QR code in person, a link through an existing channel, or a reply through the anonymous inbox.
 
 ```
 Invite {
@@ -92,7 +92,7 @@ Envelope = Join { invite_id[16], ik: {sign,dh}, ek[32], kem_ct[1088], sig[64], m
 RatchetMessage = { header, ciphertext }
 ```
 
-Every envelope is padded to exactly `BLOB_SIZE` bytes before it reaches a relay (`u32 little-endian length || data || zeros`). The relay therefore sees blobs of one size only. The decrypted payload is one of `Hello`, `Text`, `File`, `Receipt`, `Delete`, `QueueRotate`, `Profile`, and the case messages `KeyPackageRequest`, `KeyPackage`, `CaseInvite` (section 10).
+Every envelope is padded to exactly `BLOB_SIZE` bytes before it reaches a relay (`u32 little-endian length || data || zeros`). The relay therefore sees blobs of one size only. The decrypted payload is one of `Hello`, `Text`, `File`, `Receipt`, `Delete`, `QueueRotate`, `Profile`, and the project messages `KeyPackageRequest`, `KeyPackage`, `CaseInvite` (section 10).
 
 ## 7. Relay protocol
 
@@ -111,7 +111,7 @@ so a captured signature cannot be replayed on another connection.
 | `Sub { rcv_id }` | stream messages for a queue on this connection (live push) | `rcv_auth` signature |
 | `Ack { rcv_id, msg_id }` | delete a delivered message, push the next one | signature |
 | `Del { rcv_id }` | delete a queue | signature |
-| `GNew` / `GSend` / `GSub` | ordered group queue for cases: members hold `write_id`/`read_id` capabilities, messages kept until TTL, delivered in relay order with sequence numbers | capability |
+| `GNew` / `GSend` / `GSub` | ordered group queue for projects and groups: members hold `write_id`/`read_id` capabilities, messages kept until TTL, delivered in relay order with sequence numbers | capability |
 | `FPut { read_auth, max_reads, data }` / `FGet { fid }` / `FDel` | encrypted file chunks | signature for get and delete |
 | `TNew` / `TCheckIn` / `TGet` / `TDel` | time-locked blobs for the insurance file (section 11) | owner signature; `TGet` only after the deadline |
 | `Ping` / `Cover` | keepalive and cover traffic; relay answers `Cover` with `Cover` | none |
@@ -124,14 +124,14 @@ A relay learns: that some Tor client created queue Q, that some Tor client sent 
 
 1. Random 32-byte file key `FK`.
 2. Plaintext split into 256 KiB chunks; chunk *i* sealed with XChaCha20-Poly1305 under `HKDF(FK, info = "SottoFileChunk" || i)` with a zero nonce (each chunk key is used once). Every chunk is padded to full size and carries its true length.
-3. Each chunk uploaded with a fresh Ed25519 read key; `max_reads` is 1 for a contact and the member count for a case.
+3. Each chunk uploaded with a fresh Ed25519 read key; `max_reads` is 1 for a contact and the member count for a project.
 4. The `File` payload carries the relay, chunk ids, read keys, `FK`, size and SHA-256. If the chunk list does not fit in one envelope it is itself uploaded as a manifest file (one level of indirection).
 
 Received files are stored encrypted in the vault and marked *quarantined* until safe review produces a clean copy.
 
-## 9. Hybrid sealed box (drop and backups)
+## 9. Hybrid sealed box (anonymous inbox and backups)
 
-Used where the sender has no session: drop submissions, replies to sources, travel-mode backups, insurance files.
+Used where the sender has no session: anonymous inbox submissions (`sotto-drop`), replies to anonymous senders, travel-mode backups, insurance files.
 
 ```
 EK = fresh X25519
@@ -141,17 +141,17 @@ K = HKDF(salt = 0^32, ikm = DH(EK, R.dh) || SS, info = "SottoSeal_v1" || EK_pk |
 
 The payload is sealed in 64 KiB chunks with the STREAM construction (nonce = 19-byte prefix from HKDF || u32 counter || last-chunk flag), so large files never sit in memory whole and truncation is detected.
 
-## 10. Cases (groups)
+## 10. Projects (groups)
 
-Each case is an MLS group (RFC 9420, ciphersuite `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`) via OpenMLS. The relay group queue is the delivery service: it gives every member the same order, which MLS needs for commits. Key packages and Welcomes travel over the existing 1:1 ratchet channel. Only the case owner's commits are accepted by clients. Application messages carry notes, file references, source pseudonyms, role changes and audit entries.
+Each project is an MLS group (RFC 9420, ciphersuite `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`) via OpenMLS. The relay group queue is the delivery service: it gives every member the same order, which MLS needs for commits. Key packages and Welcomes travel over the existing 1:1 ratchet channel. Only the project owner's commits are accepted by clients. Application messages carry notes, file references, contact pseudonyms, role changes and audit entries.
 
 ## 11. Insurance file
 
-The owner encrypts a case package (notes and source pseudonyms) under a random key `K` in file-chunk format, creates a time lock with `TNew { owner, deadline }`, uploads the chunks with signed `TPut`, and sends each chosen colleague `InsuranceGrant { read_id, K, deadline }` over the 1:1 ratchet channel. The relay holds only ciphertext and refuses `TGet` until the deadline; colleagues hold only the key. Neither can read the package early. `TCheckIn` (owner signature) moves the deadline forward; every unlock of the owner's Sotto checks in automatically, and colleagues receive `InsuranceUpdate` with the new deadline.
+The owner encrypts a project package (notes and contact pseudonyms) under a random key `K` in file-chunk format, creates a time lock with `TNew { owner, deadline }`, uploads the chunks with signed `TPut`, and sends each chosen colleague `InsuranceGrant { read_id, K, deadline }` over the 1:1 ratchet channel. The relay holds only ciphertext and refuses `TGet` until the deadline; colleagues hold only the key. Neither can read the package early. `TCheckIn` (owner signature) moves the deadline forward; every unlock of the owner's Sotto checks in automatically, and colleagues receive `InsuranceUpdate` with the new deadline.
 
 ## 11a. Travel mode
 
-The desk generates 32 random bytes, shown once as a 24-word BIP-39 phrase (the user confirms three words). The vault directory (`vault.hdr`, `records/*`, `blobs/*`, all already encrypted) is written as `u16 path length || path || u64 size || bytes` records into a hybrid sealed stream to `SealSecret::from_seed(entropy)`, saved to a path the user chooses, and the device is then panic-wiped. Restore parses the whole archive, accepts only paths a vault contains, writes records and blobs first and the header last, then the user unlocks with their original passcode.
+The device generates 32 random bytes, shown once as a 24-word BIP-39 phrase (the user confirms three words). The vault directory (`vault.hdr`, `records/*`, `blobs/*`, all already encrypted) is written as `u16 path length || path || u64 size || bytes` records into a hybrid sealed stream to `SealSecret::from_seed(entropy)`, saved to a path the user chooses, and the device is then panic-wiped. Restore parses the whole archive, accepts only paths a vault contains, writes records and blobs first and the header last, then the user unlocks with their original passcode.
 
 ## 12. Known limits and planned work
 
@@ -159,4 +159,4 @@ The desk generates 32 random bytes, shown once as a 24-word BIP-39 phrase (the u
 - No header encryption; queue pairing already hides the social graph from the relay, but header encryption is planned for defence in depth.
 - Queue rotation (`QueueRotate`) is defined and handled; automatic rotation every 7 days is planned.
 - Relay restarts drop undelivered messages; clients mark messages delivered only on a `Receipt`.
-- The drop's no-JavaScript mode encrypts on the server at arrival (the SecureDrop model). Browser-side encryption when JavaScript is allowed is planned.
+- The anonymous inbox's no-JavaScript mode encrypts on the server at arrival (the SecureDrop model). Browser-side encryption when JavaScript is allowed is planned.

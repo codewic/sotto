@@ -1,7 +1,7 @@
 // Development: a local relay, two desks (yours and a test peer) and the Vite UI.
 // Uses plain TCP between local processes; real installs go through Tor.
 //   desk "you":  agent on 127.0.0.1:7801, UI on http://localhost:5174
-//   desk "peer": agent on 127.0.0.1:7802 (drive it with curl to simulate a contact)
+//   desk "peer": agent on 127.0.0.1:7802, UI on http://localhost:5175
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -31,6 +31,8 @@ for (const [name, port] of [["you", 7801], ["peer", 7802]]) {
   });
 }
 run("vite", resolve(app, "node_modules/.bin/vite"), [], { SOTTO_AGENT_URL: "http://127.0.0.1:7801", SOTTO_AGENT_TOKEN: "dev-token" });
+// The peer desk gets its own UI too, so calls can be tried between two browser tabs.
+run("vite-peer", resolve(app, "node_modules/.bin/vite"), [], { PORT: "5175", SOTTO_AGENT_URL: "http://127.0.0.1:7802", SOTTO_AGENT_TOKEN: "dev-token" });
 
 function stop() {
   for (const p of procs) p.kill("SIGTERM");

@@ -4,12 +4,14 @@ import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, 
 import { get, post } from "../api";
 import { Mark } from "../brand/Mark";
 import { GlyphCases, GlyphConversations, GlyphDrop, GlyphLock, GlyphReview, GlyphSettings, GlyphShield } from "../brand/glyphs";
-import type { Contact, DropView, Status } from "../types";
+import type { ChannelView, Contact, DropView, GroupView, Status } from "../types";
+import { setAppearance, toggleScheme } from "../theme/appearance";
 import { Kbd } from "../ui/bits";
 import { Cases } from "./Cases";
 import { Conversations } from "./Conversations";
 import { Drops } from "./Drops";
 import { Review } from "./Review";
+import { CallLayer } from "./Calls";
 import { Settings } from "./Settings";
 
 export type Screen = "conversations" | "drops" | "cases" | "review" | "settings";
@@ -24,8 +26,8 @@ export const useNav = () => useContext(NavCtx);
 
 const items: { screen: Screen; label: string; key: string; Glyph: (p: { className?: string }) => ReactNode }[] = [
   { screen: "conversations", label: "Conversations", key: "c", Glyph: GlyphConversations },
-  { screen: "drops", label: "Drop", key: "d", Glyph: GlyphDrop },
-  { screen: "cases", label: "Cases", key: "a", Glyph: GlyphCases },
+  { screen: "drops", label: "Anonymous inbox", key: "d", Glyph: GlyphDrop },
+  { screen: "cases", label: "Projects", key: "a", Glyph: GlyphCases },
   { screen: "review", label: "Safe review", key: "r", Glyph: GlyphReview },
   { screen: "settings", label: "Settings", key: "s", Glyph: GlyphSettings },
 ];
@@ -42,8 +44,13 @@ export function Shell({ status }: { status: Status }) {
   const go = (screen: Screen, param?: string) => setState({ screen, param });
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: () => get<Contact[]>("/api/contacts") });
   const drops = useQuery({ queryKey: ["drops"], queryFn: () => get<DropView[]>("/api/drops") });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: () => get<GroupView[]>("/api/groups") });
+  const channels = useQuery({ queryKey: ["channels"], queryFn: () => get<ChannelView[]>("/api/channels") });
   const unread: Partial<Record<Screen, number>> = {
-    conversations: contacts.data?.reduce((n, c) => n + c.unread, 0) ?? 0,
+    conversations: (contacts.data?.reduce((n, c) => n + c.unread, 0) ?? 0) +
+      // Muted groups and channels keep their own counts out of the badge.
+      (groups.data?.reduce((n, g) => n + (g.muted ? 0 : g.unread), 0) ?? 0) +
+      (channels.data?.reduce((n, c) => n + (c.muted ? 0 : c.unread), 0) ?? 0),
     drops: drops.data?.reduce((n, d) => n + d.unread, 0) ?? 0,
   };
 
@@ -59,7 +66,7 @@ export function Shell({ status }: { status: Status }) {
         setPalette((p) => !p);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "l") {
         e.preventDefault();
         void lock();
         return;
@@ -72,22 +79,47 @@ export function Shell({ status }: { status: Status }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Privacy screen: in High risk and Extreme modes message text blurs whenever Sotto loses focus.
+  const guarded = (status.settings?.risk_mode ?? "standard") !== "standard";
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!guarded) {
+      root.classList.remove("privacy-active");
+      return;
+    }
+    const hide = () => root.classList.add("privacy-active");
+    const show = () => root.classList.remove("privacy-active");
+    const vis = () => (document.hidden ? hide() : show());
+    window.addEventListener("blur", hide);
+    window.addEventListener("focus", show);
+    document.addEventListener("visibilitychange", vis);
+    if (!document.hasFocus()) hide();
+    return () => {
+      window.removeEventListener("blur", hide);
+      window.removeEventListener("focus", show);
+      document.removeEventListener("visibilitychange", vis);
+      show();
+    };
+  }, [guarded]);
+
   return (
     <NavCtx.Provider value={{ go, state, status }}>
+      <CallLayer contacts={contacts.data ?? []} onSettings={() => go("settings", "calls")}>
       <div className="flex h-svh bg-background">
-        <aside className="flex w-[236px] shrink-0 flex-col py-3 pl-3">
+        <aside className="flex w-[64px] shrink-0 flex-col py-3 pl-2 md:w-[236px] md:pl-3">
           <div className="flex items-center gap-2.5 px-2 pt-1 pb-4">
             <Mark size={28} />
-            <span className="text-[15px] font-semibold tracking-tight">Sotto</span>
+            <span className="hidden text-[15px] font-semibold tracking-tight md:inline">Sotto</span>
           </div>
           <button
             type="button"
             onClick={() => setPalette(true)}
-            className="press mr-3 mb-3 flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-muted px-3 text-[13px] whitespace-nowrap text-muted-foreground hover:bg-muted-strong"
+            aria-label="Search and commands"
+            className="press mr-2 mb-3 flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg bg-muted px-3 text-[13px] whitespace-nowrap text-muted-foreground hover:bg-muted-strong md:mr-3 md:justify-start"
           >
             <Search size={14} />
-            <span>Search</span>
-            <span className="ml-auto">
+            <span className="hidden md:inline">Search</span>
+            <span className="ml-auto hidden md:inline">
               <Kbd>⌘K</Kbd>
             </span>
           </button>
@@ -100,18 +132,19 @@ export function Shell({ status }: { status: Status }) {
                   type="button"
                   onClick={() => go(screen)}
                   aria-current={active ? "page" : undefined}
-                  className={`glyph-host press group flex h-10 cursor-pointer items-center gap-3 pr-3 pl-3 text-[14px] ${
+                  aria-label={label}
+                  className={`glyph-host press group relative flex h-10 cursor-pointer items-center gap-3 pr-3 pl-3 text-[14px] ${
                     active ? "rounded-l-xl bg-pane font-medium text-foreground" : "mr-3 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
                 >
                   <span className={active ? "text-primary" : "text-muted-foreground group-hover:text-primary"}>
                     <Glyph />
                   </span>
-                  <span className="flex-1 text-left">{label}</span>
+                  <span className="hidden flex-1 text-left md:inline">{label}</span>
                   {unread[screen] ? (
-                    <span className="min-w-5 rounded-full bg-primary px-1.5 text-center text-[11px] font-semibold text-primary-foreground tabular">{unread[screen]}</span>
+                    <span className="absolute top-1 left-7 min-w-5 rounded-full md:static bg-primary px-1.5 text-center text-[11px] font-semibold text-primary-foreground tabular">{unread[screen]}</span>
                   ) : (
-                    <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                    <span className="hidden opacity-0 transition-opacity group-hover:opacity-100 md:inline">
                       <Kbd>{key.toUpperCase()}</Kbd>
                     </span>
                   )}
@@ -119,28 +152,34 @@ export function Shell({ status }: { status: Status }) {
               );
             })}
           </nav>
-          <div className="mt-auto mr-3 flex flex-col gap-2">
-            <ConnectionCard status={status} />
+          <div className="mt-auto mr-2 flex flex-col gap-2 md:mr-3">
+            <div className="hidden md:block">
+              <ConnectionCard status={status} />
+            </div>
             <button
               type="button"
               onClick={lock}
+              aria-label="Lock Sotto"
               className="glyph-host press flex h-10 cursor-pointer items-center gap-3 rounded-xl px-3 text-[14px] text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <GlyphLock />
-              <span className="flex-1 text-left">Lock Sotto</span>
-              <Kbd>⌘L</Kbd>
+              <span className="hidden flex-1 text-left md:inline">Lock Sotto</span>
+              <span className="hidden md:inline">
+                <Kbd>⌘L</Kbd>
+              </span>
             </button>
           </div>
         </aside>
-        <main className="my-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-pane shadow-pane">
+        <main className="my-2 mr-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-pane shadow-pane">
           {state.screen === "conversations" && <Conversations initial={state.param} />}
           {state.screen === "drops" && <Drops />}
           {state.screen === "cases" && <Cases />}
           {state.screen === "review" && <Review initial={state.param} />}
-          {state.screen === "settings" && <Settings />}
+          {state.screen === "settings" && <Settings key={state.param ?? ""} initial={state.param} />}
         </main>
       </div>
       {palette && <Palette onClose={() => setPalette(false)} contacts={contacts.data ?? []} onLock={lock} />}
+      </CallLayer>
     </NavCtx.Provider>
   );
 }
@@ -183,8 +222,13 @@ function Palette({ onClose, contacts, onLock }: { onClose: () => void; contacts:
     const list: { label: string; hint: string; run: () => void }[] = [
       ...items.map((i) => ({ label: i.label, hint: "Go to", run: () => go(i.screen) })),
       { label: "Invite someone", hint: "Conversations", run: () => go("conversations", "invite") },
-      { label: "Use an invite", hint: "Conversations", run: () => go("conversations", "accept") },
+      { label: "Add someone by tag or link", hint: "Conversations", run: () => go("conversations", "accept") },
       { label: "Lock Sotto", hint: "Security", run: onLock },
+      { label: "Appearance settings", hint: "Appearance", run: () => go("settings", "appearance") },
+      { label: "Switch light and dark", hint: "Appearance", run: () => toggleScheme() },
+      { label: "Use light theme", hint: "Appearance", run: () => setAppearance({ mode: "light" }) },
+      { label: "Use dark theme", hint: "Appearance", run: () => setAppearance({ mode: "dark" }) },
+      { label: "Follow system theme", hint: "Appearance", run: () => setAppearance({ mode: "system" }) },
       ...contacts.map((c) => ({ label: c.nickname || c.their_name || "Unnamed contact", hint: "Open conversation", run: () => go("conversations", c.id) })),
     ];
     const needle = q.trim().toLowerCase();

@@ -41,6 +41,14 @@ pub enum Cmd {
     TDel { tl_id: Id, sig: Sig },
     Ping,
     Cover,
+    /// Tags: add ready one-time invites (each with its expiry) under a short name. The first
+    /// `owner` (Ed25519 public key) to add under a tag owns it; later adds must be signed by them
+    /// over `tag || sha256(all invites)`. An empty list just reports how many are left.
+    TagAdd { tag: String, owner: [u8; 32], invites: Vec<(Vec<u8>, u64)>, sig: Sig },
+    /// Take one invite for a tag (each is handed out once).
+    TagTake { tag: String },
+    /// Release a tag and every invite under it. Signed by the owner over `tag`.
+    TagDel { tag: String, sig: Sig },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +73,8 @@ pub enum Resp {
     Locked { deadline: u64 },
     Pong,
     Err(ErrCode),
+    TagLeft { left: u32 },
+    TagInvite { invite: Vec<u8> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

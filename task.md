@@ -4,6 +4,12 @@ Spec: `SPEC.md`. Protocol: `docs/protocol.md`. Threat model: `docs/threat-model.
 
 Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo/config.toml` limits builds to 2 jobs. Run targeted tests (`cargo test -p <crate>`); the full suite takes about 10 minutes from cold.
 
+## Positioning
+- [x] Repositioned from journalists only to a private, end-to-end encrypted workspace for teams (12 November 2026): README, SPEC and docs rewritten; in the app Drop is now "Anonymous inbox", Cases are "Projects", project roles read Owner, Editor, Contributor and Legal, "Before you publish" is "Before you share". API paths, stored data and crate names are unchanged.
+- [x] Developer features (`docs/developers.md`): code blocks with highlighting in messages, groups and channels; integrations that post into a group or channel with their own tokens, plus the `sotto-hook` command; one-time secrets in 1:1 conversations; search inside 1:1 conversations
+
+- [x] Tags (`@ada`) for inviting without a link, contact requests, generated default avatars for everyone, a 960-avatar collection with a picker shared with contacts, and the Contours wallpaper by default (`docs/tags-and-avatars.md`)
+
 ## Phase 0: foundations
 - [x] Threat model, protocol spec, Rust workspace, pinned toolchain, release profile
 - [ ] Outside cryptographer review (owner action)
@@ -42,9 +48,58 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 - [ ] Independent audit and its published report (owner action)
 - [ ] Hosted relays in two jurisdictions (owner action)
 
+## UI and UX overhaul (see `docs/ux.md`)
+- [x] Replies, reactions, edits and opt-in read receipts in the protocol and engine (tested)
+- [x] Chat list: previews, pinned on top, archive, filters (All, Unread, Pinned, Archived), search, right-click menu
+- [x] Thread: grouped bubbles, sticky day labels, "New messages" divider, jump to latest with a count, hover actions and context menu
+- [x] Composer: reply and edit banners, Up to edit your last message, drag and drop or paste a file, drafts kept in memory only
+- [x] Safe formatting (bold, italic, code, quotes); links shown, never fetched
+- [x] Protection strip under each header; info panel (Ctrl or Cmd I) with safety number, timer, read receipts, files
+- [x] Privacy screen: messages and previews blur when Sotto loses focus in High risk and Extreme modes
+- [x] Narrow layout: sidebar becomes a rail, chat list and thread become one column, info panel floats
+- [ ] Message search inside a conversation
+- [ ] Same treatment for Drop source threads and Case notes
+
+## Theming (see `docs/ux.md`, Theming)
+- [x] Token-driven themes: Light, Soft, Dim, Dark, Midnight; follow system with a separate light and dark pick
+- [x] Seven accents tuned per scheme (Violet default, Graphite for no colour); every text pairing measured at 4.5:1 or better
+- [x] Hand-drawn chat wallpapers (Notebook, Graph, Dots, Waves, Contours, Desk, Tint) with three strengths, drawn from tokens
+- [x] Your messages as Ink, Accent or Tint; message text size; Comfortable or Compact density
+- [x] Interface size (Ctrl/Cmd plus, minus, 0), increase contrast, reduce motion
+- [x] Live preview built from the real message components; theme cards render real tokens
+- [x] No flash on launch (applied before first paint), native dialogs and window follow the theme, new theme opens out from the click
+- [x] Appearance kept outside the vault and removed by Erase and Travel mode
+- [ ] Per-conversation wallpaper and a custom image wallpaper (would need storage inside the vault)
+
 ## Defaults taken for open decisions
 - Name: Sotto (working). Standalone brand, Vorynza credited in About.
-- Accent: violet `#5b47c7` light, `#a896ff` dark.
+- Accent: violet `#5b47c7` light, `#a896ff` dark (the default; users can pick from seven tuned accents in Appearance).
 - Desktop shell: Electron (no webkit2gtk here; Electron ships its own sandboxed Chromium).
 - Hosting: hosted and self-hosted relays.
 - Insurance file: kept.
+
+## Calls (design in `docs/calls.md`, not started)
+- [x] Phase 0: Tor latency spike (`crates/sotto-call-spike`). Result: too slow for live calls (best call 921 ms, median 1.4 s, 16 s to connect); calls move to a self-hosted server
+- [ ] Phase 1: call server
+  - [x] `crates/sotto-call-broker`: random rooms, short-lived tokens carrying room limits, rate limits, no logs (9 tests) and a smoke test that joins a real server
+  - [x] `deploy/calls/`: Compose (LiveKit 1.13.3, broker, Caddy), `livekit.yaml` with TURN, `setup.sh`, firewall and operator guide, optional broker onion service
+  - [x] Tested locally against LiveKit 1.13.3: pair and huddle rooms join with the right limits and a TURN relay; tampered and expired tokens refused
+  - [x] `docs/transparency/call-server.md`: what the server sees and keeps
+  - [x] Coolify package `deploy/calls/coolify/`: one pasteable compose file with the broker source embedded (generated by `make.py`, lock file pinned), guide for the server operator; tested locally (embedded files unpack byte-for-byte, LiveKit config from the environment, broker behind a container proxy)
+  - [ ] Colleague deploys on Coolify and sends back the broker address; then run the smoke test against it
+- [x] Phase 2: 1:1 voice on desktop (call messages and media keys, agent routes, dedicated call window with end-to-end encryption, call UI, missed calls, risk-mode rules); tested on a live local call
+  - [x] Voice activity hidden from the server: no `ssrc-audio-level` header, constant-bitrate Opus, speaking detected on the device, mute local only (measured: packets 151/33 bytes before, a steady 150 after)
+  - [ ] Try the Electron call window with a real microphone, then a call through the deployed server
+- [x] Group calls: add people to any call (up to 8), names shared encrypted inside the call, ends when the room empties; tested live with three desks
+- [ ] Phase 3: video in the call window
+- [ ] Phase 4: phones (Android, then iOS)
+- [ ] Phase 5: case huddles with MLS-derived keys, consensual recording into the case vault
+- [ ] Owner decisions: calls in High risk mode, broker abuse control, video at launch
+
+## Groups and channels (design in `docs/groups.md`)
+- [x] Design: groups on Cases MLS, channels by 1:1 fan-out so subscribers never see each other, group calls
+- [x] Groups: create, add and remove members, replies, reactions, edits, deletes, disappearing timer, pin and archive, group info, call the group from the header, live updates; agent test `groups_names_messages_and_removal`, tested live with three desks
+- [x] Groups: files (quarantined, Safe review), search, pinned messages, admins besides the creator (adds and removals carried out by the creator's desk), group safety number, mute; agent test `groups_admins_pins_files_and_safety`
+- [x] Channels: create, invite, follow by choice, posts as cards with edits and deletes, history for new followers, private replies to the owner, follower list on the owner's desk only, remove, close; agent test `channels_follow_post_reply_and_stay_private`, tested live with three desks
+- [x] Channels: files in posts (copies per 250 followers, fresh copy for late followers), opt-in read receipts with "Seen by", search, mute; agent test `channels_files_receipts_and_mute`
+- [ ] Owner decisions: Spaces (Discord-style servers), group size limit, channel size limit

@@ -9,10 +9,12 @@ All hand-built SVG, themed through CSS variables (`--mark-deep`, `--mark-mid`, `
 | `GlyphConversations`, `GlyphDrop`, `GlyphCases`, `GlyphReview`, `GlyphSettings` | `glyphs.tsx` | Sidebar navigation and command palette |
 | `GlyphShield`, `GlyphLock` | `glyphs.tsx` | Protection level and lock control |
 | `SpotConversations` | `spots.tsx` | No conversations yet |
-| `SpotDrop` | `spots.tsx` | No drop connected, no submissions |
+| `SpotDrop` | `spots.tsx` | Anonymous inbox: none connected, nothing received |
 | `SpotSandbox` | `spots.tsx` | Safe review empty and quarantine states |
 | `SpotLocked` | `spots.tsx` | Unlock screen |
-| `SpotCases` | `spots.tsx` | No cases yet |
+| `SpotCases` | `spots.tsx` | No projects yet |
 | `SpotDone` | `spots.tsx` | Setup finished, invite accepted |
 
 Construction: 48 x 48 tile on a 4 px grid, 12 px corner radius, two tones of the Sotto violet, a soft top-left highlight. Nav glyphs: 20 x 20, 1.6 stroke, one fill at 18% opacity so the active state tints with the accent.
+
+Chat wallpapers live in `src/theme/Wallpaper.tsx`. They are built the same way, hand-drawn SVG from theme tokens (`--wall-bg`, `--wall-ink`, `--wall-accent`): Notebook (ruled lines and a margin), Graph, Dots, Waves, Contours (generated topographic rings with accent index lines) and Desk (twelve one-stroke objects from a work desk on a 300 px tile). They are decorative only and never take pointer events.

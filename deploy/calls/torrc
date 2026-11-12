@@ -1,0 +1,8 @@
+# Optional: also offer the call broker as an onion service, so Sotto can ask for rooms without
+# leaving Tor at all. Append to /etc/tor/torrc. Media still goes to the public call server.
+HiddenServiceDir /var/lib/tor/sotto-call-broker/
+HiddenServicePort 80 127.0.0.1:7890
+HiddenServiceVersion 3
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 50
+HiddenServicePoWQueueBurst 500

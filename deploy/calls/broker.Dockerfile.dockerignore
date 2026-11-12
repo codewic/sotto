@@ -1,0 +1,11 @@
+# Only the Rust workspace is needed to build the broker.
+target
+apps
+deploy
+docs
+scripts
+**/node_modules
+**/.dev-data
+**/*.part*
+**/*.tmp*
+.git

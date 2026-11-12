@@ -4,10 +4,18 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod avatars;
+pub mod calls;
 pub mod cases;
+pub mod channels;
 pub mod drops;
+pub mod groups;
+pub mod hooks;
 pub mod review;
+pub mod secrets;
+pub mod shared;
 pub mod state;
+pub mod tags;
 pub mod travel;
 
 use axum::Json;

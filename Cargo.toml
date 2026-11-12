@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/vorynza/sotto"
+repository = "https://github.com/codewic/sotto"
 rust-version = "1.95"
 
 [profile.release]

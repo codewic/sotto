@@ -1,0 +1,10 @@
+[package]
+name = "sotto-hook"
+description = "Post a message from a script, CI job or monitor into a Sotto group or channel, through the Sotto app running on this computer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]

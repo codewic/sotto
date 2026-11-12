@@ -1,0 +1,30 @@
+# TLS for the call server. Caddy writes no access logs unless a `log` directive is present,
+# and there is none here on purpose.
+{
+	email {$ACME_EMAIL}
+	# Let's Encrypt only, so the certificate path in livekit.yaml is predictable.
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	admin off
+}
+
+{$CALLS_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Referrer-Policy no-referrer
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	# The call broker: join tokens for throwaway rooms.
+	handle /v1/* {
+		reverse_proxy 127.0.0.1:7890
+	}
+	handle /healthz {
+		reverse_proxy 127.0.0.1:7890
+	}
+
+	# LiveKit signalling (WebSocket) and its own health check.
+	handle {
+		reverse_proxy 127.0.0.1:7880
+	}
+}

@@ -76,8 +76,8 @@ export function Setup() {
 
         {step === "welcome" && (
           <>
-            <h1 className="text-[26px] leading-tight font-semibold tracking-tight">Talk to sources without leaving a trail</h1>
-            <p className="mt-2 text-[14.5px] text-muted-foreground">Sotto protects the people who trust you with information, from the first message to the day you publish.</p>
+            <h1 className="text-[26px] leading-tight font-semibold tracking-tight">Work together without leaving a trail</h1>
+            <p className="mt-2 text-[14.5px] text-muted-foreground">Messages, calls, files and shared projects for your team, end-to-end encrypted, with no accounts, phone numbers or emails tying any of it to you.</p>
             <ul className="mt-7 flex flex-col gap-4">
               {protects.map(([t, d]) => (
                 <li key={t} className="flex gap-3">
@@ -193,7 +193,7 @@ export function Setup() {
                 value={relay}
                 onChange={(e) => setRelay(e.target.value)}
                 spellCheck={false}
-                hint="Your newsroom gives you this. Leave it empty to use the default. You can change it later in Settings."
+                hint="Your organization gives you this. Leave it empty to use the default. You can change it later in Settings."
               />
             </div>
             {error && (

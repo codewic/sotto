@@ -37,6 +37,8 @@ impl Drop for Scratch {
 pub enum Source<'a> {
     Message { contact: [u8; 16], message: [u8; 16], blob: String },
     Drop { drop: &'a str, source: &'a str, item: &'a str, blob: String },
+    /// A file in a group or channel (`at` as in `shared`).
+    Shared { at: String, blob: String },
 }
 
 impl Source<'_> {
@@ -44,6 +46,7 @@ impl Source<'_> {
         match self {
             Source::Message { blob, .. } => format!("m:{blob}"),
             Source::Drop { blob, .. } => format!("d:{blob}"),
+            Source::Shared { blob, .. } => format!("s:{blob}"),
         }
     }
 }
@@ -52,6 +55,7 @@ fn store_for<'a>(s: &'a Session, src: &Source) -> &'a Arc<Store> {
     match src {
         Source::Message { .. } => s.engine.store(),
         Source::Drop { .. } => &s.drops,
+        Source::Shared { .. } => &s.cases,
     }
 }
 
@@ -68,7 +72,7 @@ pub async fn run(s: &Arc<Session>, src: Source<'_>, greyscale: bool) -> Result<V
     let input = scratch.0.join("input");
     {
         let blob = match &src {
-            Source::Message { blob, .. } | Source::Drop { blob, .. } => blob.clone(),
+            Source::Message { blob, .. } | Source::Drop { blob, .. } | Source::Shared { blob, .. } => blob.clone(),
         };
         use std::os::unix::fs::OpenOptionsExt;
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&input).map_err(|_| ApiError::Internal)?;
@@ -99,6 +103,12 @@ pub async fn run(s: &Arc<Session>, src: Source<'_>, greyscale: bool) -> Result<V
             if let Some(mut it) = s.drops.get::<crate::drops::DropItem>(&k)? {
                 it.review = review.clone();
                 s.drops.put(&k, &it)?;
+            }
+        }
+        Source::Shared { at, .. } => {
+            if let Some(mut f) = crate::shared::get(s, at) {
+                f.review = review.clone();
+                crate::shared::put(s, at, &f)?;
             }
         }
     }

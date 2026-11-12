@@ -6,6 +6,10 @@ type Bridge = {
   onEvent(fn: (data: string) => void): () => void;
   saveDialog(name: string): Promise<string | null>;
   setContentProtection(on: boolean): Promise<void>;
+  /** Open (or bring forward) the call window for a call. */
+  openCall?(callId: string): Promise<void>;
+  setZoom?(factor: number): Promise<void>;
+  setAppearance?(a: { scheme: "light" | "dark"; background: string }): Promise<void>;
 };
 
 declare global {
@@ -16,6 +20,13 @@ declare global {
 }
 
 const bridge = typeof window !== "undefined" ? window.sotto : undefined;
+
+/** Development only: ?desk=peer or ?desk=third talks to the other test desks through the dev proxy. */
+const deskBase = (() => {
+  if (!import.meta.env.DEV || typeof location === "undefined") return "";
+  const d = new URLSearchParams(location.search).get("desk");
+  return d === "peer" || d === "third" ? `/desk/${d}` : "";
+})();
 
 export class ApiError extends Error {
   status: number;
@@ -34,7 +45,7 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     data = r.body;
   } else {
     const bytes = body instanceof Uint8Array;
-    const res = await fetch(path, {
+    const res = await fetch(deskBase + path, {
       method,
       headers: { ...(body != null && !bytes ? { "content-type": "application/json" } : {}), ...headers },
       body: body == null ? undefined : bytes ? (body as Uint8Array<ArrayBuffer>) : JSON.stringify(body),
@@ -53,6 +64,7 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
 export const get = <T>(path: string) => api<T>("GET", path);
 export const post = <T>(path: string, body?: unknown) => api<T>("POST", path, body ?? {});
 export const patch = <T>(path: string, body: unknown) => api<T>("PATCH", path, body);
+export const put = <T>(path: string, body: unknown) => api<T>("PUT", path, body);
 export const del = <T>(path: string) => api<T>("DELETE", path);
 
 /** Fetch an image (review page preview) as an object URL. */
@@ -62,7 +74,7 @@ export async function imageUrl(path: string): Promise<string> {
     if (r.status >= 400 || !r.bytes) throw new ApiError("Couldn't load this page.", r.status);
     return URL.createObjectURL(new Blob([r.bytes as Uint8Array<ArrayBuffer>], { type: r.type ?? "image/png" }));
   }
-  const res = await fetch(path);
+  const res = await fetch(deskBase + path);
   if (!res.ok) throw new ApiError("Couldn't load this page.", res.status);
   return URL.createObjectURL(await res.blob());
 }
@@ -86,7 +98,7 @@ export function subscribe(onEvent: (e: AgentEvent) => void): () => void {
     while (!stopped) {
       try {
         ctrl = new AbortController();
-        const res = await fetch("/api/events", { signal: ctrl.signal });
+        const res = await fetch(`${deskBase}/api/events`, { signal: ctrl.signal });
         if (!res.ok || !res.body) throw new Error("no stream");
         const reader = res.body.getReader();
         const dec = new TextDecoder();

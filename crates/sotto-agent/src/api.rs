@@ -25,7 +25,7 @@ type A = State<Arc<Agent>>;
 type R = Result<Json<Value>, ApiError>;
 
 pub fn router(agent: Arc<Agent>) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/api/status", get(status))
         .route("/api/setup", post(setup))
         .route("/api/unlock", post(unlock))
@@ -42,7 +42,8 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/api/contacts/{id}/read", post(mark_read))
         .route("/api/contacts/{id}/messages", get(messages).post(send_text))
         .route("/api/contacts/{id}/files", post(send_file))
-        .route("/api/contacts/{id}/messages/{mid}", delete(delete_message))
+        .route("/api/contacts/{id}/messages/{mid}", delete(delete_message).patch(edit_message))
+        .route("/api/contacts/{id}/messages/{mid}/react", post(react))
         .route("/api/contacts/{id}/messages/{mid}/retry", post(retry))
         .route("/api/contacts/{id}/messages/{mid}/review", post(review_message))
         .route("/api/drops", get(list_drops).post(create_drop))
@@ -59,10 +60,21 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/api/reviews/{key}/pages/{n}", get(get_page))
         .route("/api/reviews/{key}/export", post(export))
         .merge(crate::cases::routes())
+        .merge(crate::calls::routes())
+        .merge(crate::groups::routes())
+        .merge(crate::channels::routes())
         .merge(crate::travel::routes())
+        .merge(crate::hooks::routes())
+        .merge(crate::secrets::routes())
+        .merge(crate::tags::routes())
+        .merge(crate::avatars::routes())
         .layer(DefaultBodyLimit::max(512 << 20))
         .layer(axum::middleware::from_fn_with_state(agent.clone(), guard))
-        .with_state(agent)
+        .with_state(agent.clone());
+    // Integrations post with their own tokens, so they sit outside the app's guard (and don't
+    // count as someone using the app, which would hold off auto-lock).
+    let hooks = crate::hooks::public_routes().layer(DefaultBodyLimit::max(64 << 10)).with_state(agent);
+    api.merge(hooks)
 }
 
 /// Every request must carry the per-launch token, and Host must be local (blocks DNS rebinding).
@@ -288,7 +300,22 @@ async fn set_duress(State(agent): A, Json(b): Json<DuressIn>) -> R {
 
 async fn contacts(State(agent): A) -> R {
     let s = agent.session().await?;
-    Ok(Json(json!(s.engine.contacts().await)))
+    // Invites stocked for your tag aren't conversations yet; people who came through it are
+    // marked as requests until you accept them.
+    let hidden = crate::tags::hidden(&s);
+    let mut out = Vec::new();
+    for c in s.engine.contacts().await {
+        if hidden.contains(&c.id) {
+            continue;
+        }
+        let mut v = json!(c);
+        if let Ok(cid) = id(&c.id) {
+            v["request_tag"] = json!(crate::tags::request_of(&s, &cid));
+            v["avatar"] = json!(crate::avatars::of(&s, &cid));
+        }
+        out.push(v);
+    }
+    Ok(Json(json!(out)))
 }
 
 #[derive(Deserialize)]
@@ -333,7 +360,33 @@ async fn contact(State(agent): A, Path(cid): Path<String>) -> R {
 }
 
 #[derive(Deserialize)]
+struct ReactIn {
+    emoji: String,
+    on: bool,
+}
+
+async fn react(State(agent): A, Path((cid, mid)): Path<(String, String)>, Json(b): Json<ReactIn>) -> R {
+    let s = agent.session().await?;
+    s.engine.react(&id(&cid)?, &id(&mid)?, &b.emoji, b.on).await?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct EditIn {
+    text: String,
+}
+
+async fn edit_message(State(agent): A, Path((cid, mid)): Path<(String, String)>, Json(b): Json<EditIn>) -> R {
+    let s = agent.session().await?;
+    s.engine.edit(&id(&cid)?, &id(&mid)?, &b.text).await?;
+    ok()
+}
+
+#[derive(Deserialize)]
 struct PatchContactIn {
+    pinned: Option<bool>,
+    archived: Option<bool>,
+    read_receipts: Option<bool>,
     nickname: Option<String>,
     verified: Option<bool>,
     /// Seconds; 0 means "keep until deleted".
@@ -348,6 +401,15 @@ async fn patch_contact(State(agent): A, Path(cid): Path<String>, Json(b): Json<P
     }
     if let Some(v) = b.verified {
         s.engine.set_verified(&cid, v).await?;
+    }
+    if let Some(v) = b.pinned {
+        s.engine.set_pinned(&cid, v).await?;
+    }
+    if let Some(v) = b.archived {
+        s.engine.set_archived(&cid, v).await?;
+    }
+    if let Some(v) = b.read_receipts {
+        s.engine.set_read_receipts(&cid, v).await?;
     }
     if let Some(t) = b.timer {
         s.engine.set_timer(&cid, if t == 0 { None } else { Some(t.clamp(60, 365 * 86_400)) }).await?;
@@ -375,14 +437,17 @@ async fn messages(State(agent): A, Path(cid): Path<String>) -> R {
 #[derive(Deserialize)]
 struct TextIn {
     text: String,
+    #[serde(default)]
+    reply_to: Option<String>,
 }
 
 async fn send_text(State(agent): A, Path(cid): Path<String>, Json(b): Json<TextIn>) -> R {
     let s = agent.session().await?;
-    Ok(Json(json!(s.engine.send_text(&id(&cid)?, &b.text).await?)))
+    let reply_to = b.reply_to.as_deref().map(id).transpose()?;
+    Ok(Json(json!(s.engine.send_text(&id(&cid)?, &b.text, reply_to).await?)))
 }
 
-fn header_text(h: &HeaderMap, name: &str) -> String {
+pub(crate) fn header_text(h: &HeaderMap, name: &str) -> String {
     let raw = h.get(name).and_then(|v| v.to_str().ok()).unwrap_or("");
     percent_decode(raw)
 }
@@ -547,6 +612,29 @@ async fn all_files(State(agent): A) -> R {
                 }));
             }
         }
+    }
+    // Files in groups and channels.
+    for (at, f) in crate::shared::all(&s) {
+        let mut parts = at.split('/');
+        let (Some(kind), Some(owner), Some(item)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let Ok(oid) = id(owner) else { continue };
+        let (where_, path) = match kind {
+            "g" => (crate::groups::title_of(&s, &oid), format!("/api/groups/{owner}/messages/{item}/review")),
+            "c" => (crate::channels::title_of(&s, &oid), format!("/api/channels/{owner}/posts/{item}/review")),
+            _ => continue,
+        };
+        let Some(where_) = where_ else { continue };
+        let at_ms = s.cases.names(&format!("{}/{owner}/", if kind == "g" { "gmsg" } else { "cpost" })).into_iter().find(|n| n.ends_with(item)).and_then(|n| n.rsplit('/').next()?.split('-').next()?.parse::<u64>().ok()).unwrap_or(0);
+        let v = crate::shared::view(&f, "");
+        out.push(json!({
+            "origin": if kind == "g" { "group" } else { "channel" },
+            "where": where_,
+            "key": format!("s:{}", f.blob),
+            "review_path": path,
+            "outgoing": matches!(f.review, sotto_client::Review::Own),
+            "name": f.name, "mime": f.mime, "size": f.size, "status": v["status"], "review": v["review"],
+            "at": at_ms / 1000,
+        }));
     }
     for a in drops::accounts(&s.drops)? {
         for src in drops::sources(&s.drops, &a.id)? {

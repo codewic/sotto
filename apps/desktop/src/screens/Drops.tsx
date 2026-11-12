@@ -9,6 +9,7 @@ import { Dialog } from "../ui/Dialog";
 import { Field } from "../ui/Field";
 import { Chip, CopyButton, Empty, Notice, Skeleton, bytes, dayLabel, timeLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
+import { Avatar } from "../ui/Avatar";
 import { PaneHeader, useNav } from "./Shell";
 
 export function Drops() {
@@ -21,7 +22,7 @@ export function Drops() {
   if (drops.isPending) {
     return (
       <>
-        <PaneHeader title="Drop" loading />
+        <PaneHeader title="Anonymous inbox" loading />
         <div className="flex flex-col gap-3 p-6">
           <Skeleton className="h-12 w-1/3" />
           <Skeleton className="h-40" />
@@ -32,18 +33,18 @@ export function Drops() {
   if (list.length === 0) {
     return (
       <>
-        <PaneHeader title="Drop" />
+        <PaneHeader title="Anonymous inbox" />
         <div className="grid flex-1 place-items-center">
           <Empty
             art={<SpotDrop />}
-            title="Connect your source drop"
+            title="Connect your anonymous inbox"
             action={
               <Button variant="primary" icon={<Plus size={16} />} onClick={() => setConnect(true)}>
-                Connect a drop
+                Connect an inbox
               </Button>
             }
           >
-            A drop lets sources reach you from Tor Browser without installing anything or creating an account. They get a codename; you see what they send here, encrypted until it reaches this desk.
+            An anonymous inbox lets anyone reach your team from Tor Browser without installing anything or creating an account: whistleblowing reports, security vulnerability reports, tips. Each sender gets a codename; you see what they send here, encrypted until it reaches this device.
           </Empty>
         </div>
         <ConnectDialog open={connect} onClose={() => setConnect(false)} onCreated={setDropId} />
@@ -72,7 +73,7 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
     setSyncing(true);
     try {
       const r = await post<{ added: number }>(`/api/drops/${drop.id}/sync`);
-      toast(r.added ? "success" : "info", r.added ? `${r.added} new item${r.added === 1 ? "" : "s"} downloaded and removed from the drop.` : "Nothing new on the drop.");
+      toast(r.added ? "success" : "info", r.added ? `${r.added} new item${r.added === 1 ? "" : "s"} downloaded and removed from the inbox server.` : "Nothing new in the inbox.");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -85,7 +86,7 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
     <div className="flex h-full min-h-0">
       <section className="flex w-[300px] shrink-0 flex-col border-r border-line">
         <PaneHeader
-          title={drop.name || "Drop"}
+          title={drop.name || "Anonymous inbox"}
           subtitle={drop.last_sync ? `Checked ${timeLabel(drop.last_sync * 1000)}` : "Not checked yet"}
           loading={syncing}
           actions={
@@ -107,7 +108,7 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
           {sources.isPending && <Skeleton className="m-2 h-14" />}
           {sources.data?.length === 0 && (
             <div className="px-3 py-6 text-[13px] leading-relaxed text-muted-foreground">
-              No submissions yet. When a source writes to your drop, they appear here under a pseudonym.{" "}
+              Nothing yet. When someone writes to your inbox, they appear here under a pseudonym.{" "}
               <button className="cursor-pointer font-medium text-foreground underline underline-offset-4" onClick={sync}>
                 Check now
               </button>
@@ -119,7 +120,7 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
               onClick={() => setSourceId(s.id)}
               className={`press flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-left ${s.id === sourceId ? "bg-muted" : "hover:bg-muted/60"}`}
             >
-              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-muted-strong font-mono text-[11px] font-semibold text-muted-foreground">{s.pseudonym.slice(-3)}</span>
+              <Avatar seed={`sender:${s.id}`} size={36} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[14px] font-medium">{s.pseudonym}</span>
                 <span className="block text-[12.5px] text-muted-foreground">Last wrote {dayLabel(s.last_day)}</span>
@@ -130,12 +131,12 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
         </div>
         <div className="flex gap-1 border-t border-line p-2">
           <Button size="sm" variant="ghost" className="flex-1" onClick={() => setSetup(true)}>
-            Drop keys
+            Inbox keys
           </Button>
           <Button size="sm" variant="ghost" className="flex-1" icon={<Plus size={14} />} onClick={onConnect}>
-            Add drop
+            Add inbox
           </Button>
-          <IconButton label="Remove this drop" onClick={() => setRemove(true)}>
+          <IconButton label="Remove this inbox" onClick={() => setRemove(true)}>
             <Trash2 size={15} />
           </IconButton>
         </div>
@@ -146,7 +147,7 @@ function DropWorkspace({ drop, drops, onSwitch, onConnect }: { drop: DropView; d
         ) : (
           <div className="grid flex-1 place-items-center px-8">
             <div className="max-w-md text-center text-[13.5px] leading-relaxed text-muted-foreground">
-              Choose a source on the left. Sources are shown by pseudonym only. Sotto never learns their codename or anything else about them.
+              Choose a sender on the left. Senders are shown by pseudonym only. Sotto never learns their codename or anything else about them.
             </div>
           </div>
         )}
@@ -232,7 +233,7 @@ function SourceThread({ drop, source }: { drop: DropView; source: SourceView }) 
                 )}
               </div>
               <span className="mt-0.5 px-1 text-[11.5px] text-muted-foreground">
-                {it.kind === "reply" ? "You replied" : "Source"} · {dayLabel(it.day)}
+                {it.kind === "reply" ? "You replied" : "Sender"} · {dayLabel(it.day)}
               </span>
             </li>
           ))}
@@ -273,7 +274,7 @@ function SourceThread({ drop, source }: { drop: DropView; source: SourceView }) 
             </Button>
           </div>
         </div>
-        <p className="mt-2 px-1 text-[12px] text-muted-foreground">Replies are sealed to this source's codename. The drop can't read them.</p>
+        <p className="mt-2 px-1 text-[12px] text-muted-foreground">Replies are sealed to this sender's codename. The inbox server can't read them.</p>
       </form>
     </>
   );
@@ -294,7 +295,7 @@ function ConnectDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
     onClose();
   };
   return (
-    <Dialog open={open} onClose={close} title={created ? "Add these keys to your drop" : "Connect a drop"} width={created ? 560 : 480}>
+    <Dialog open={open} onClose={close} title={created ? "Add these keys to your inbox server" : "Connect an anonymous inbox"} width={created ? 560 : 480}>
       {created ? (
         <KeysBody drop={created} onDone={close} />
       ) : (
@@ -316,8 +317,8 @@ function ConnectDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             }
           }}
         >
-          <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Investigations tips" autoFocus />
-          <Field label="Drop address" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…onion" spellCheck={false} error={error} hint="The onion address your drop server prints when it starts." />
+          <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Whistleblowing reports" autoFocus />
+          <Field label="Inbox address" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…onion" spellCheck={false} error={error} hint="The onion address your inbox server prints when it starts." />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={close}>
               Cancel
@@ -333,11 +334,11 @@ function ConnectDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
 }
 
 function KeysBody({ drop, onDone }: { drop: DropView; onDone: () => void }) {
-  const config = JSON.stringify({ newsroom_key: drop.newsroom_key, journalists: [{ name: "This desk", sign_pk: drop.journalist_key }] }, null, 2);
+  const config = JSON.stringify({ newsroom_key: drop.newsroom_key, journalists: [{ name: "This device", sign_pk: drop.journalist_key }] }, null, 2);
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13.5px] text-muted-foreground">
-        Put these two values in the drop server's <span className="font-mono text-foreground">drop.json</span>. The newsroom key lets the drop seal submissions to you; the desk key lets this app fetch them. Neither is secret, but check you are editing your own server.
+        Put these two values in the inbox server's <span className="font-mono text-foreground">drop.json</span>. The organization key lets the server seal what people send to you; the device key lets this app fetch it. Neither is secret, but check you are editing your own server.
       </p>
       <pre className="max-h-56 overflow-auto rounded-xl bg-muted p-3 font-mono text-[11.5px] leading-relaxed break-all whitespace-pre-wrap text-muted-foreground">{config}</pre>
       <div className="flex items-center justify-between">
@@ -346,14 +347,14 @@ function KeysBody({ drop, onDone }: { drop: DropView; onDone: () => void }) {
           Done
         </Button>
       </div>
-      <Notice>Colleagues can share one newsroom key. Each desk still gets its own desk key, so access can be removed one person at a time.</Notice>
+      <Notice>Colleagues can share one organization key. Each device still gets its own device key, so access can be removed one person at a time.</Notice>
     </div>
   );
 }
 
 function KeysDialog({ open, onClose, drop }: { open: boolean; onClose: () => void; drop: DropView }) {
   return (
-    <Dialog open={open} onClose={onClose} title={`${drop.name || "Drop"} keys`} width={560}>
+    <Dialog open={open} onClose={onClose} title={`${drop.name || "Inbox"} keys`} width={560}>
       <div className="mb-4 flex items-center gap-2 text-[13px] text-muted-foreground">
         <Chip>{drop.url}</Chip>
       </div>
@@ -365,7 +366,7 @@ function KeysDialog({ open, onClose, drop }: { open: boolean; onClose: () => voi
 function RemoveDropDialog({ open, onClose, drop }: { open: boolean; onClose: () => void; drop: DropView }) {
   const qc = useQueryClient();
   return (
-    <Dialog open={open} onClose={onClose} title={`Remove ${drop.name || "this drop"}?`} description="Every source, message and file downloaded from this drop is erased from this device. The drop server itself is not touched.">
+    <Dialog open={open} onClose={onClose} title={`Remove ${drop.name || "this inbox"}?`} description="Every sender, message and file downloaded from this inbox is erased from this device. The inbox server itself is not touched.">
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -378,7 +379,7 @@ function RemoveDropDialog({ open, onClose, drop }: { open: boolean; onClose: () 
             onClose();
           }}
         >
-          Remove drop
+          Remove inbox
         </Button>
       </div>
     </Dialog>

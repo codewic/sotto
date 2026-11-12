@@ -24,6 +24,10 @@ What the relay keeps on disk (`/var/lib/sotto-relay`): `meta.bin` with queue and
 
 The drop keeps only sealed submissions and sealed replies, with dates rounded to the day. Desks delete submissions after downloading them unless that setting is turned off.
 
+## Call server
+
+Calls run on a self-hosted LiveKit server with a small token broker in front of it, deployed with Docker Compose from `deploy/calls/`. Unlike the relay and drop it has a public address, because live media can't run over Tor fast enough. See [calls/README.md](calls/README.md).
+
 ## Denial of service
 
 Every onion client looks the same to the service, so per-address limits do nothing. Both torrc templates turn on Tor's onion service proof-of-work defence (`HiddenServicePoWDefensesEnabled 1`), which makes floods expensive for attackers while normal visitors notice nothing. The drop also limits codename attempts to 30 per minute in total.

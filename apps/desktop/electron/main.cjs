@@ -1,6 +1,6 @@
 // Sotto desktop shell. The renderer is sandboxed with no Node access; every request goes
 // through a narrow IPC bridge to the local agent, which listens on a private Unix socket.
-const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, nativeTheme, session } = require("electron");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -11,6 +11,10 @@ app.enableSandbox();
 let agent = null;
 let token = null;
 let win = null;
+// The call window: at most one, for one call.
+let callWin = null;
+let callId = null;
+let callHost = null;
 const userData = app.getPath("userData");
 const socketPath = path.join(userData, "agent.sock");
 
@@ -99,6 +103,7 @@ function streamEvents() {
         buf = buf.slice(i + 2);
         const line = block.split("\n").find((l) => l.startsWith("data:"));
         if (line && win) win.webContents.send("sotto:event", line.slice(5).trim());
+        if (line && callWin) callWin.webContents.send("sotto:event", line.slice(5).trim());
       }
     });
     res.on("end", () => setTimeout(streamEvents, 1000));
@@ -114,7 +119,8 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: "Sotto",
-    backgroundColor: "#f5f5f5",
+    // Close to the theme the page will pick; the page sends the exact colour once it loads.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f3f3f3",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -135,6 +141,88 @@ function createWindow() {
   win.loadFile(path.join(__dirname, "../dist/index.html"));
 }
 
+/** The call window lives in its own session: the only place a microphone is allowed, and it may
+ *  reach exactly one call server. The main window (which renders message text) keeps denying all. */
+function callSession() {
+  const s = session.fromPartition("sotto-call");
+  if (!s.__sottoReady) {
+    s.__sottoReady = true;
+    const isCallWindow = (wc) => Boolean(callWin && wc === callWin.webContents);
+    s.setPermissionRequestHandler((wc, perm, cb, details) => {
+      const audioOnly = Array.isArray(details.mediaTypes) && details.mediaTypes.length > 0 && details.mediaTypes.every((t) => t === "audio");
+      cb(isCallWindow(wc) && perm === "media" && audioOnly);
+    });
+    s.setPermissionCheckHandler((wc, perm) => isCallWindow(wc) && perm === "media");
+    s.webRequest.onBeforeRequest((details, cb) => {
+      let ok = details.url.startsWith("file://") || details.url.startsWith("devtools://");
+      if (!ok && callHost) {
+        try {
+          const u = new URL(details.url);
+          ok = (u.protocol === "wss:" || u.protocol === "https:") && u.host === callHost;
+        } catch {
+          ok = false;
+        }
+      }
+      cb({ cancel: !ok });
+    });
+  }
+  return s;
+}
+
+async function openCall(id) {
+  if (callWin && callId === id) {
+    callWin.show();
+    callWin.focus();
+    return;
+  }
+  // Learn which call server this call uses, so the window may reach that one host and no other.
+  const r = await request("GET", `/api/calls/${id}/join`, null);
+  if (r.status !== 200 || !r.body || typeof r.body.url !== "string") return;
+  let host;
+  try {
+    host = new URL(r.body.url).host;
+  } catch {
+    return;
+  }
+  if (callWin) callWin.close();
+  callId = id;
+  callHost = host;
+  callWin = new BrowserWindow({
+    width: 400,
+    height: 620,
+    minWidth: 340,
+    minHeight: 520,
+    title: "Sotto call",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f3f3f3",
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload-call.cjs"),
+      session: callSession(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      spellcheck: false,
+      devTools: !app.isPackaged,
+    },
+  });
+  const me = callWin;
+  me.once("ready-to-show", () => me.show());
+  me.webContents.on("will-navigate", (e) => e.preventDefault());
+  me.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  me.setContentProtection(true);
+  me.on("closed", () => {
+    // Closing the window hangs up. Harmless if the call already ended.
+    request("POST", `/api/calls/${id}/end`, {});
+    if (callWin === me) {
+      callWin = null;
+      callId = null;
+      callHost = null;
+    }
+  });
+  me.loadFile(path.join(__dirname, "../dist/call.html"), { hash: id });
+}
+
 // Only the app's own page may use the bridge.
 const fromApp = (e) => Boolean(e.senderFrame && e.senderFrame.url.startsWith("file://") && win && e.sender === win.webContents);
 ipcMain.handle("sotto:request", (e, method, urlPath, body, headers) =>
@@ -146,8 +234,32 @@ ipcMain.handle("sotto:save-dialog", async (e, name) => {
   return r.canceled ? null : r.filePath;
 });
 ipcMain.handle("sotto:content-protection", (e, on) => fromApp(e) && win.setContentProtection(!!on));
+ipcMain.handle("sotto:open-call", (e, id) => {
+  if (!fromApp(e) || typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return;
+  return openCall(id);
+});
+// The call window may only talk to its own call's routes.
+const fromCall = (e) => Boolean(callWin && e.sender === callWin.webContents && e.senderFrame && e.senderFrame.url.startsWith("file://"));
+ipcMain.handle("sotto:call-request", (e, method, urlPath, body) => {
+  if (!fromCall(e) || typeof urlPath !== "string" || !callId || !urlPath.startsWith(`/api/calls/${callId}/`)) return { status: 403, body: { error: "Not allowed." } };
+  return request(method, urlPath, body, {});
+});
+ipcMain.handle("sotto:appearance", (e, a) => {
+  if (!fromApp(e) || !a || typeof a !== "object") return;
+  if (a.scheme === "light" || a.scheme === "dark") nativeTheme.themeSource = a.scheme;
+  if (typeof a.background === "string" && /^#[0-9a-f]{6}$/i.test(a.background)) win.setBackgroundColor(a.background);
+});
+
+/** No menu bar, and no built-in zoom keys: Sotto handles Ctrl +, Ctrl - and Ctrl 0 itself so the
+ *  Appearance setting always matches. macOS keeps the menus it needs for copy and paste. */
+function setMenu() {
+  const dev = app.isPackaged ? [] : [{ label: "Develop", submenu: [{ role: "reload" }, { role: "toggleDevTools" }] }];
+  if (process.platform === "darwin") Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }, { role: "windowMenu" }, ...dev]));
+  else Menu.setApplicationMenu(dev.length ? Menu.buildFromTemplate(dev) : null);
+}
 
 app.whenReady().then(async () => {
+  setMenu();
   // Deny every browser permission request.
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
   // The renderer may only load its own files: nothing on the network.

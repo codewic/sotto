@@ -4,3 +4,5 @@ dist
 .dev-data
 *.part*
 *.tmp*
+deploy/calls/.env
+deploy/calls/livekit.yaml

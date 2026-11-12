@@ -5,7 +5,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use sotto_core::envelope::{Envelope, FileRef, Payload, Profile as WireProfile};
+use sotto_core::envelope::{CallSignal, Envelope, FileRef, Payload, Profile as WireProfile};
 use sotto_core::invite::Invite;
 use sotto_core::keys::{Identity, sign, signing_keypair};
 use sotto_core::wire::{Cmd, Resp, auth_message};
@@ -14,6 +14,7 @@ use sotto_vault::Store;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
+use crate::calls::{Call, CallView, Calls, Direction, EndReason, JoinInfo, Phase, RoomGrant};
 use crate::conn::{Push, RelayConn, Status, Transport};
 use crate::model::*;
 use crate::{Error, Result, files};
@@ -36,6 +37,8 @@ pub enum Event {
     Message { contact_id: String, id: String },
     MessageRemoved { contact_id: String, id: String },
     Relay { url: String, status: Status },
+    /// A call changed state. Never carries join tokens or keys.
+    Call { call: CallView },
     #[serde(skip)]
     Extension { contact_id: Id, payload: Payload },
 }
@@ -54,6 +57,7 @@ struct Inner {
     /// expires_at -> (store name, blob id)
     expiry: Mutex<BTreeMap<(u64, String), Option<String>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    calls: Mutex<Calls>,
 }
 
 #[derive(Clone)]
@@ -107,6 +111,7 @@ impl Engine {
                 tor_only: AtomicBool::new(false),
                 expiry: Mutex::new(expiry),
                 tasks: Mutex::new(Vec::new()),
+                calls: Mutex::new(Calls::default()),
             }),
         };
         let tor = matches!(engine.inner.profile.lock().await.transport, Transport::Tor { .. });
@@ -257,6 +262,12 @@ impl Engine {
             unread: 0,
             invite_id: Some(invite.id()),
             invite_expires: invite.expires_at,
+            pinned: false,
+            archived: false,
+            read_receipts: false,
+            preview: "Invite waiting".into(),
+            preview_at: now,
+            preview_outgoing: true,
         };
         self.inner.store.put(&invite_name(&invite.id()), &PendingInvite { secret, contact_id: contact.id })?;
         self.persist(&contact)?;
@@ -307,6 +318,12 @@ impl Engine {
             unread: 0,
             invite_id: None,
             invite_expires: 0,
+            pinned: false,
+            archived: false,
+            read_receipts: false,
+            preview: String::new(),
+            preview_at: now,
+            preview_outgoing: false,
         };
         self.persist(&contact)?;
         let id = contact.id;
@@ -345,8 +362,79 @@ impl Engine {
         self.update_contact(id, |c| c.verified = verified).await
     }
 
+    /// Mark everything read; sends read receipts only if they are on for this contact.
     pub async fn mark_read(&self, id: &Id) -> Result<()> {
+        let receipts = self.inner.contacts.lock().await.get(id).map(|c| c.read_receipts).ok_or(Error::NotFound)?;
+        let mut ids = Vec::new();
+        for name in self.inner.store.names(&format!("msg/{}/", hex(id))) {
+            if let Some(mut m) = self.inner.store.get::<Message>(&name)? {
+                if !m.outgoing && !m.read && !matches!(m.body, Body::System(_)) {
+                    m.read = true;
+                    self.save_message(&m)?;
+                    ids.push(m.id);
+                }
+            }
+        }
+        if receipts && !ids.is_empty() {
+            let _ = self.send_payload(id, &Payload::Read { ids }).await;
+        }
         self.update_contact(id, |c| c.unread = 0).await
+    }
+
+    pub async fn set_pinned(&self, id: &Id, on: bool) -> Result<()> {
+        self.update_contact(id, |c| c.pinned = on).await
+    }
+
+    pub async fn set_archived(&self, id: &Id, on: bool) -> Result<()> {
+        self.update_contact(id, |c| c.archived = on).await
+    }
+
+    pub async fn set_read_receipts(&self, id: &Id, on: bool) -> Result<()> {
+        self.update_contact(id, |c| c.read_receipts = on).await
+    }
+
+    async fn set_preview(&self, id: &Id, m: &Message) {
+        let (preview, at, out) = (m.preview(), m.received_at / 1000, m.outgoing);
+        let _ = self
+            .update_contact(id, |c| {
+                c.preview = preview;
+                c.preview_at = at;
+                c.preview_outgoing = out;
+            })
+            .await;
+    }
+
+    /// React to a message (yours or theirs). One reaction per emoji per side.
+    pub async fn react(&self, contact: &Id, message: &Id, emoji: &str, on: bool) -> Result<()> {
+        let emoji: String = emoji.chars().take(8).collect();
+        if emoji.is_empty() {
+            return Err(Error::Invalid("Choose a reaction."));
+        }
+        let mut m = self.find_message(contact, message).ok_or(Error::NotFound)?;
+        m.reactions.retain(|r| !(r.mine && r.emoji == emoji));
+        if on {
+            m.reactions.push(Reaction { emoji: emoji.clone(), mine: true });
+        }
+        self.save_message(&m)?;
+        self.emit(Event::Message { contact_id: hex(contact), id: hex(message) });
+        self.send_payload(contact, &Payload::Reaction { target: *message, emoji, on }).await
+    }
+
+    /// Edit one of your own text messages, on both sides.
+    pub async fn edit(&self, contact: &Id, message: &Id, body: &str) -> Result<()> {
+        let body = body.trim_end().to_string();
+        if body.is_empty() {
+            return Err(Error::Invalid("A message can't be empty. Delete it instead."));
+        }
+        let mut m = self.find_message(contact, message).ok_or(Error::NotFound)?;
+        if !m.outgoing || !matches!(m.body, Body::Text(_)) {
+            return Err(Error::Invalid("You can only edit your own text messages."));
+        }
+        m.body = Body::Text(body.clone());
+        m.edited = true;
+        self.save_message(&m)?;
+        self.emit(Event::Message { contact_id: hex(contact), id: hex(message) });
+        self.send_payload(contact, &Payload::Edit { target: *message, body }).await
     }
 
     /// Change the disappearing-message timer for both sides.
@@ -418,7 +506,7 @@ impl Engine {
         self.inner.contacts.lock().await.get(id).map(|c| c.ttl_secs).ok_or(Error::NotFound)
     }
 
-    pub async fn send_text(&self, id: &Id, body: &str) -> Result<MessageView> {
+    pub async fn send_text(&self, id: &Id, body: &str, reply_to: Option<Id>) -> Result<MessageView> {
         let body = body.trim_end().to_string();
         if body.is_empty() {
             return Err(Error::Invalid("Write a message first."));
@@ -438,10 +526,15 @@ impl Engine {
             expires_at: ttl.map(|t| time::now() + t as u64),
             delivery: Delivery::Sending,
             remote_file: None,
+            reply_to,
+            reactions: Vec::new(),
+            edited: false,
+            read: false,
         };
         self.save_message(&m)?;
         self.track_expiry(&m).await;
-        let result = self.send_payload(id, &Payload::Text { id: m.id, body, sent_at: now_ms, ttl_secs: ttl }).await;
+        self.set_preview(id, &m).await;
+        let result = self.send_payload(id, &Payload::Text { id: m.id, body, sent_at: now_ms, ttl_secs: ttl, reply_to }).await;
         m.delivery = if result.is_ok() { Delivery::Sent } else { Delivery::Failed };
         self.save_message(&m)?;
         self.emit(Event::Message { contact_id: hex(id), id: hex(&m.id) });
@@ -453,7 +546,7 @@ impl Engine {
         let mut m = self.find_message(contact, message).ok_or(Error::NotFound)?;
         let Body::Text(body) = m.body.clone() else { return Err(Error::Invalid("Only text messages can be resent.")) };
         let ttl = self.ttl_of(contact).await?;
-        let result = self.send_payload(contact, &Payload::Text { id: m.id, body, sent_at: m.sent_at, ttl_secs: ttl }).await;
+        let result = self.send_payload(contact, &Payload::Text { id: m.id, body, sent_at: m.sent_at, ttl_secs: ttl, reply_to: m.reply_to }).await;
         m.delivery = if result.is_ok() { Delivery::Sent } else { Delivery::Failed };
         self.save_message(&m)?;
         self.emit(Event::Message { contact_id: hex(contact), id: hex(&m.id) });
@@ -512,12 +605,17 @@ impl Engine {
             expires_at: ttl.map(|t| time::now() + t as u64),
             delivery: Delivery::Sending,
             remote_file: None,
+            reply_to: None,
+            reactions: Vec::new(),
+            edited: false,
+            read: false,
         };
         let payload = Payload::File { id: mid, file, caption: caption.chars().take(2000).collect(), sent_at: now_ms, ttl_secs: ttl };
         let result = self.send_payload(id, &payload).await;
         m.delivery = if result.is_ok() { Delivery::Sent } else { Delivery::Failed };
         self.save_message(&m)?;
         self.track_expiry(&m).await;
+        self.set_preview(id, &m).await;
         self.emit(Event::Message { contact_id: hex(id), id: hex(&mid) });
         result.map(|_| m.view())
     }
@@ -565,6 +663,10 @@ impl Engine {
             expires_at: None,
             delivery: Delivery::Received,
             remote_file: None,
+            reply_to: None,
+            reactions: Vec::new(),
+            edited: false,
+            read: false,
         };
         self.save_message(&m)?;
         self.emit(Event::Message { contact_id: hex(contact), id: hex(&m.id) });
@@ -695,7 +797,7 @@ impl Engine {
         let now = time::now();
         let now_ms = time::now_ms();
         match p {
-            Payload::Text { id, body, sent_at, ttl_secs } => {
+            Payload::Text { id, body, sent_at, ttl_secs, reply_to } => {
                 let m = Message {
                     id,
                     contact_id: *cid,
@@ -706,6 +808,10 @@ impl Engine {
                     expires_at: ttl_secs.map(|t| now + t as u64),
                     delivery: Delivery::Received,
                     remote_file: None,
+                    reply_to,
+                    reactions: Vec::new(),
+                    edited: false,
+                    read: false,
                 };
                 self.accept_incoming(cid, m).await?;
                 let _ = self.send_payload(cid, &Payload::Receipt { ids: vec![id] }).await;
@@ -730,6 +836,10 @@ impl Engine {
                     expires_at: ttl_secs.map(|t| now + t as u64),
                     delivery: Delivery::Received,
                     remote_file: Some(file),
+                    reply_to: None,
+                    reactions: Vec::new(),
+                    edited: false,
+                    read: false,
                 };
                 self.accept_incoming(cid, m).await?;
                 let _ = self.send_payload(cid, &Payload::Receipt { ids: vec![id] }).await;
@@ -738,6 +848,38 @@ impl Engine {
                 tokio::spawn(async move {
                     let _ = me.download(&cid, &id).await;
                 });
+            }
+            Payload::Reaction { target, emoji, on } => {
+                if let Some(mut m) = self.find_message(cid, &target) {
+                    let emoji: String = emoji.chars().take(8).collect();
+                    m.reactions.retain(|r| r.mine || r.emoji != emoji);
+                    if on && m.reactions.iter().filter(|r| !r.mine).count() < 20 {
+                        m.reactions.push(Reaction { emoji, mine: false });
+                    }
+                    self.save_message(&m)?;
+                    self.emit(Event::Message { contact_id: hex(cid), id: hex(&target) });
+                }
+            }
+            Payload::Edit { target, body } => {
+                if let Some(mut m) = self.find_message(cid, &target) {
+                    if !m.outgoing && matches!(m.body, Body::Text(_)) {
+                        m.body = Body::Text(body.chars().take(12_000).collect());
+                        m.edited = true;
+                        self.save_message(&m)?;
+                        self.emit(Event::Message { contact_id: hex(cid), id: hex(&target) });
+                    }
+                }
+            }
+            Payload::Read { ids } => {
+                for id in ids.into_iter().take(500) {
+                    if let Some(mut m) = self.find_message(cid, &id) {
+                        if m.outgoing && !m.read {
+                            m.read = true;
+                            self.save_message(&m)?;
+                            self.emit(Event::Message { contact_id: hex(cid), id: hex(&id) });
+                        }
+                    }
+                }
             }
             Payload::Receipt { ids } => {
                 for id in ids {
@@ -772,6 +914,7 @@ impl Engine {
                 self.update_contact(cid, |c| c.their_queue = Some(queue)).await?;
             }
             Payload::Hello { .. } => {}
+            Payload::Call(signal) => self.on_call(cid, signal).await,
             other => self.emit(Event::Extension { contact_id: *cid, payload: other }),
         }
         Ok(())
@@ -784,9 +927,407 @@ impl Engine {
         }
         self.save_message(&m)?;
         self.track_expiry(&m).await;
-        self.update_contact(cid, |c| c.unread = c.unread.saturating_add(1)).await?;
+        let (preview, at) = (m.preview(), m.received_at / 1000);
+        self.update_contact(cid, |c| {
+            c.unread = c.unread.saturating_add(1);
+            c.preview = preview;
+            c.preview_at = at;
+            c.preview_outgoing = false;
+        })
+        .await?;
         self.emit(Event::Message { contact_id: hex(cid), id: hex(&m.id) });
         Ok(())
+    }
+
+    // ---------- Calls ----------
+
+    /// Shorten how long calls ring (tests).
+    pub async fn set_ring_time(&self, d: std::time::Duration) {
+        self.inner.calls.lock().await.ring = Some(d);
+    }
+
+    /// Calls still going on (at most one).
+    pub async fn calls(&self) -> Vec<CallView> {
+        self.inner.calls.lock().await.map.values().filter(|c| c.phase != Phase::Ended).map(|c| c.view(None)).collect()
+    }
+
+    async fn call_view(&self, call_id: &Id) -> Option<CallView> {
+        self.inner.calls.lock().await.map.get(call_id).map(|c| c.view(None))
+    }
+
+    async fn call_phase(&self, call_id: &Id) -> Option<Phase> {
+        self.inner.calls.lock().await.map.get(call_id).map(|c| c.phase)
+    }
+
+    async fn emit_call(&self, call_id: &Id) {
+        if let Some(v) = self.call_view(call_id).await {
+            self.emit(Event::Call { call: v });
+        }
+    }
+
+    fn spawn_task(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
+        let h = tokio::spawn(fut);
+        if let Ok(mut t) = self.inner.tasks.try_lock() {
+            t.retain(|t| !t.is_finished());
+            t.push(h);
+        }
+    }
+
+    /// Start a call to a contact in a room the call broker created. The offer travels as an
+    /// ordinary end-to-end encrypted message carrying the other side's join token and a fresh
+    /// media key. The caller joins the room at once and waits there.
+    pub async fn start_call(&self, contact: &Id, grant: RoomGrant) -> Result<CallView> {
+        {
+            let contacts = self.inner.contacts.lock().await;
+            let c = contacts.get(contact).ok_or(Error::NotFound)?;
+            if c.state != ContactState::Ready || c.ratchet.is_none() {
+                return Err(Error::NotReady);
+            }
+        }
+        let call_id = new_id();
+        let key: [u8; 32] = sotto_core::rand::bytes();
+        let ring = {
+            let mut calls = self.inner.calls.lock().await;
+            if calls.busy() {
+                return Err(Error::Invalid("You're already on a call."));
+            }
+            let ring = calls.ring();
+            calls.map.insert(
+                call_id,
+                Call {
+                    id: call_id,
+                    contact: *contact,
+                    direction: Direction::Outgoing,
+                    phase: Phase::Calling,
+                    url: grant.url.clone(),
+                    room: grant.room,
+                    token: grant.my_token,
+                    key,
+                    started_ms: time::now_ms(),
+                    answered_ms: None,
+                    group: false,
+                    invited: Vec::new(),
+                },
+            );
+            ring
+        };
+        let offer = CallSignal::Offer {
+            call_id,
+            url: grant.url,
+            room: self.call_room(&call_id).await.map(|r| r.1).unwrap_or_default(),
+            token: grant.their_token,
+            key,
+            video: false,
+            expires_at: time::now_ms() + ring.as_millis() as u64,
+            group: false,
+        };
+        if let Err(e) = self.send_payload(contact, &Payload::Call(offer)).await {
+            self.inner.calls.lock().await.map.remove(&call_id);
+            return Err(e);
+        }
+        let view = self.call_view(&call_id).await.ok_or(Error::NotFound)?;
+        self.emit(Event::Call { call: view.clone() });
+        let (me, contact) = (self.clone(), *contact);
+        self.spawn_task(async move {
+            tokio::time::sleep(ring).await;
+            if me.call_phase(&call_id).await == Some(Phase::Calling) {
+                let _ = me.send_payload(&contact, &Payload::Call(CallSignal::Cancel { call_id })).await;
+                me.finish_call(&call_id, EndReason::NoAnswer).await;
+            }
+        });
+        Ok(view)
+    }
+
+    /// Answer a ringing call. The call window then joins with [`Engine::join_info`].
+    pub async fn answer_call(&self, call_id: &Id) -> Result<CallView> {
+        let contact = {
+            let mut calls = self.inner.calls.lock().await;
+            let c = calls.map.get_mut(call_id).ok_or(Error::NotFound)?;
+            if c.phase != Phase::Ringing {
+                return Err(Error::Invalid("This call isn't ringing any more."));
+            }
+            c.phase = Phase::Active;
+            c.answered_ms = Some(time::now_ms());
+            c.contact
+        };
+        // If this message is lost, the caller still sees us arrive in the room.
+        let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Answer { call_id: *call_id })).await;
+        let v = self.call_view(call_id).await.ok_or(Error::NotFound)?;
+        self.emit(Event::Call { call: v.clone() });
+        Ok(v)
+    }
+
+    /// Decline a ringing call. Silent unless `say` is set ("can't talk now").
+    pub async fn decline_call(&self, call_id: &Id, say: bool) -> Result<()> {
+        let contact = {
+            let calls = self.inner.calls.lock().await;
+            let c = calls.map.get(call_id).ok_or(Error::NotFound)?;
+            if c.phase != Phase::Ringing {
+                return Err(Error::Invalid("This call isn't ringing any more."));
+            }
+            c.contact
+        };
+        if say {
+            let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Decline { call_id: *call_id })).await;
+        }
+        self.finish_call(call_id, EndReason::Declined).await;
+        Ok(())
+    }
+
+    /// The call window saw more than one other person: from now on one person leaving doesn't end it.
+    pub async fn mark_group_call(&self, call_id: &Id) -> Result<()> {
+        let changed = {
+            let mut calls = self.inner.calls.lock().await;
+            let c = calls.map.get_mut(call_id).ok_or(Error::NotFound)?;
+            let was = c.group;
+            c.group = true;
+            !was
+        };
+        if changed {
+            self.emit_call(call_id).await;
+        }
+        Ok(())
+    }
+
+    /// The broker room behind a call this desk started or joined by adding people.
+    pub async fn call_room(&self, call_id: &Id) -> Option<(String, String)> {
+        self.inner.calls.lock().await.map.get(call_id).filter(|c| !c.room.is_empty()).map(|c| (c.url.clone(), c.room.clone()))
+    }
+
+    /// Add someone to a call that's going: they get an ordinary invitation with the same media key
+    /// and a join token for the same room.
+    pub async fn invite_to_call(&self, call_id: &Id, contact: &Id, token: String) -> Result<CallView> {
+        {
+            let contacts = self.inner.contacts.lock().await;
+            let c = contacts.get(contact).ok_or(Error::NotFound)?;
+            if c.state != ContactState::Ready || c.ratchet.is_none() {
+                return Err(Error::NotReady);
+            }
+        }
+        let (url, room, key, ring) = {
+            let mut calls = self.inner.calls.lock().await;
+            let ring = calls.ring();
+            let c = calls.map.get_mut(call_id).ok_or(Error::NotFound)?;
+            if !matches!(c.phase, Phase::Calling | Phase::Active) {
+                return Err(Error::Invalid("This call has ended."));
+            }
+            if c.contact == *contact || c.invited.contains(contact) {
+                return Err(Error::Invalid("They're already in this call."));
+            }
+            c.group = true;
+            c.invited.push(*contact);
+            (c.url.clone(), c.room.clone(), c.key, ring)
+        };
+        let offer = CallSignal::Offer { call_id: *call_id, url, room, token, key, video: false, expires_at: time::now_ms() + ring.as_millis() as u64, group: true };
+        if let Err(e) = self.send_payload(contact, &Payload::Call(offer)).await {
+            if let Some(c) = self.inner.calls.lock().await.map.get_mut(call_id) {
+                c.invited.retain(|x| x != contact);
+            }
+            return Err(e);
+        }
+        self.emit_call(call_id).await;
+        self.call_view(call_id).await.ok_or(Error::NotFound)
+    }
+
+    /// Refuse a ringing call without telling the caller, because calls are off here.
+    pub async fn refuse_call(&self, call_id: &Id) {
+        if self.call_phase(call_id).await == Some(Phase::Ringing) {
+            self.finish_call(call_id, EndReason::Off).await;
+        }
+    }
+
+    /// Hang up, cancel an outgoing call, or (while ringing) decline silently.
+    pub async fn end_call(&self, call_id: &Id) -> Result<()> {
+        let (contact, phase) = {
+            let calls = self.inner.calls.lock().await;
+            let c = calls.map.get(call_id).ok_or(Error::NotFound)?;
+            (c.contact, c.phase)
+        };
+        match phase {
+            Phase::Calling => {
+                let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Cancel { call_id: *call_id })).await;
+                self.finish_call(call_id, EndReason::Cancelled).await;
+            }
+            Phase::Ringing => self.finish_call(call_id, EndReason::Declined).await,
+            Phase::Active => {
+                let _ = self.send_payload(&contact, &Payload::Call(CallSignal::End { call_id: *call_id })).await;
+                self.finish_call(call_id, EndReason::Finished).await;
+            }
+            Phase::Ended => {}
+        }
+        Ok(())
+    }
+
+    /// The call window saw the other person arrive in the room.
+    pub async fn call_peer_joined(&self, call_id: &Id) -> Result<()> {
+        {
+            let mut calls = self.inner.calls.lock().await;
+            let c = calls.map.get_mut(call_id).ok_or(Error::NotFound)?;
+            if c.phase != Phase::Calling {
+                return Ok(());
+            }
+            c.phase = Phase::Active;
+            c.answered_ms = Some(time::now_ms());
+        }
+        self.emit_call(call_id).await;
+        Ok(())
+    }
+
+    /// What the call window needs to join. Only once the call is answered (or, for the caller,
+    /// right away, so it can wait in the room).
+    pub async fn join_info(&self, call_id: &Id) -> Result<JoinInfo> {
+        let calls = self.inner.calls.lock().await;
+        let c = calls.map.get(call_id).ok_or(Error::NotFound)?;
+        match c.phase {
+            Phase::Calling | Phase::Active => Ok(JoinInfo {
+                call_id: c.id,
+                contact_id: c.contact,
+                url: c.url.clone(),
+                token: c.token.clone(),
+                key: c.key,
+                outgoing: c.direction == Direction::Outgoing,
+                group: c.group,
+            }),
+            Phase::Ringing => Err(Error::Invalid("Answer the call first.")),
+            Phase::Ended => Err(Error::Invalid("This call has ended.")),
+        }
+    }
+
+    /// End a call locally: drop its keys, leave a line in the conversation, tell the UI.
+    async fn finish_call(&self, call_id: &Id, reason: EndReason) {
+        let Some(mut call) = self.inner.calls.lock().await.map.remove(call_id) else { return };
+        call.phase = Phase::Ended;
+        let talked = call.answered_ms.map(|a| time::now_ms().saturating_sub(a) / 1000);
+        let (text, unread) = crate::calls::record(call.direction, reason, talked, call.group);
+        self.add_call_record(&call.contact, text, unread).await;
+        self.emit(Event::Call { call: call.view(Some(reason)) });
+    }
+
+    async fn add_call_record(&self, contact: &Id, text: String, unread: bool) {
+        let now_ms = time::now_ms();
+        let ttl = self.ttl_of(contact).await.ok().flatten();
+        let m = Message {
+            id: new_id(),
+            contact_id: *contact,
+            outgoing: false,
+            body: Body::System(text),
+            sent_at: now_ms,
+            received_at: now_ms,
+            expires_at: ttl.map(|t| time::now() + t as u64),
+            delivery: Delivery::Received,
+            remote_file: None,
+            reply_to: None,
+            reactions: Vec::new(),
+            edited: false,
+            read: !unread,
+        };
+        if self.save_message(&m).is_err() {
+            return;
+        }
+        self.track_expiry(&m).await;
+        let (preview, at) = (m.preview(), m.received_at / 1000);
+        let _ = self
+            .update_contact(contact, |c| {
+                if unread {
+                    c.unread = c.unread.saturating_add(1);
+                }
+                c.preview = preview;
+                c.preview_at = at;
+                c.preview_outgoing = false;
+            })
+            .await;
+        self.emit(Event::Message { contact_id: hex(contact), id: hex(&m.id) });
+    }
+
+    async fn on_call(&self, cid: &Id, signal: CallSignal) {
+        let call_id = signal.call_id();
+        match signal {
+            CallSignal::Offer { url, room, token, key, expires_at, group, .. } => {
+                let now_ms = time::now_ms();
+                let busy = {
+                    let mut calls = self.inner.calls.lock().await;
+                    if calls.map.contains_key(&call_id) {
+                        return;
+                    }
+                    let busy = calls.busy();
+                    if !busy && expires_at > now_ms {
+                        calls.map.insert(
+                            call_id,
+                            Call {
+                                id: call_id,
+                                contact: *cid,
+                                direction: Direction::Incoming,
+                                phase: Phase::Ringing,
+                                url,
+                                room,
+                                token,
+                                key,
+                                started_ms: now_ms,
+                                answered_ms: None,
+                                group,
+                                invited: Vec::new(),
+                            },
+                        );
+                    }
+                    busy
+                };
+                if busy {
+                    let (text, unread) = crate::calls::record(Direction::Incoming, EndReason::MissedBusy, None, false);
+                    self.add_call_record(cid, text, unread).await;
+                    return;
+                }
+                if expires_at <= now_ms {
+                    // Arrived after it stopped ringing (for example while this desk was locked).
+                    let (text, unread) = crate::calls::record(Direction::Incoming, EndReason::Missed, None, false);
+                    self.add_call_record(cid, text, unread).await;
+                    return;
+                }
+                self.emit_call(&call_id).await;
+                let me = self.clone();
+                let wait = std::time::Duration::from_millis(expires_at - now_ms);
+                self.spawn_task(async move {
+                    tokio::time::sleep(wait).await;
+                    if me.call_phase(&call_id).await == Some(Phase::Ringing) {
+                        me.finish_call(&call_id, EndReason::Missed).await;
+                    }
+                });
+            }
+            other => {
+                // Every other signal must come from the contact the call is with.
+                let (direction, phase, answered, group) = {
+                    let calls = self.inner.calls.lock().await;
+                    match calls.map.get(&call_id) {
+                        Some(c) if c.contact == *cid || c.invited.contains(cid) => (c.direction, c.phase, c.answered_ms.is_some(), c.group),
+                        _ => return,
+                    }
+                };
+                match other {
+                    CallSignal::Answer { .. } if phase == Phase::Calling => {
+                        let _ = self.call_peer_joined(&call_id).await;
+                    }
+                    CallSignal::Decline { .. } if phase == Phase::Calling => self.finish_call(&call_id, EndReason::TheyDeclined).await,
+                    CallSignal::Cancel { .. } if phase == Phase::Ringing => self.finish_call(&call_id, EndReason::Missed).await,
+                    // In a group call one person leaving doesn't end it: the call window ends it
+                    // when the room is empty.
+                    CallSignal::End { .. } if group && answered => {
+                        // They left; they can be added back later.
+                        if let Some(c) = self.inner.calls.lock().await.map.get_mut(&call_id) {
+                            c.invited.retain(|x| x != cid);
+                        }
+                        self.emit_call(&call_id).await;
+                    }
+                    CallSignal::End { .. } => {
+                        let reason = match (answered, direction) {
+                            (true, _) => EndReason::Finished,
+                            (false, Direction::Outgoing) => EndReason::NoAnswer,
+                            (false, Direction::Incoming) => EndReason::Missed,
+                        };
+                        self.finish_call(&call_id, reason).await;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// Fetch a received file into the vault. Called automatically; can be retried.

@@ -135,7 +135,7 @@ impl SottoClient {
     pub fn send_text(&self, contact_id: String, text: String) -> Result<(), SottoError> {
         let e = self.engine()?;
         let id: [u8; 16] = unhex(&contact_id).map_err(err)?;
-        self.rt.block_on(e.send_text(&id, &text)).map(|_| ()).map_err(err)
+        self.rt.block_on(e.send_text(&id, &text, None)).map(|_| ()).map_err(err)
     }
 
     pub fn create_invite(&self, nickname: String, label: String) -> Result<String, SottoError> {

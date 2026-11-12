@@ -72,7 +72,7 @@ export function SpotLocked() {
   );
 }
 
-/** Cases: a folder with pages lifting out of it. */
+/** Projects: a folder with pages lifting out of it. */
 export function SpotCases() {
   return (
     <Frame>

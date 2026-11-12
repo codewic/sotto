@@ -64,7 +64,7 @@ export function Review({ initial }: { initial?: string }) {
         ) : (
           <div className="grid flex-1 place-items-center">
             <Empty art={<SpotSandbox />} title={incoming.length ? "Choose a file to review" : "No files received yet"}>
-              Files from sources stay quarantined. Reviewing one renders it inside a sealed sandbox with no network, then rebuilds a clean copy from its pixels, so scripts, hidden text and tracking data can't come along.
+              Files you receive stay quarantined. Reviewing one renders it inside a sealed sandbox with no network, then rebuilds a clean copy from its pixels, so scripts, hidden text and tracking data can't come along.
             </Empty>
           </div>
         )}
@@ -81,6 +81,7 @@ function ReviewChip({ state }: { state: FileEntry["review"]["state"] }) {
 }
 
 function reviewPath(f: FileEntry) {
+  if (f.review_path) return f.review_path;
   return f.origin === "conversation" ? `/api/contacts/${f.contact_id}/messages/${f.message_id}/review` : `/api/drops/${f.drop_id}/sources/${f.source_id}/items/${f.item}/review`;
 }
 
@@ -155,7 +156,7 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
     <>
       <PaneHeader
         title={file?.name ?? "Clean copy"}
-        subtitle={`${r.pages} page${r.pages === 1 ? "" : "s"} · ${findings ? `${findings} finding${findings === 1 ? "" : "s"} before publishing` : "Nothing found that points to a source"}`}
+        subtitle={`${r.pages} page${r.pages === 1 ? "" : "s"} · ${findings ? `${findings} finding${findings === 1 ? "" : "s"} before sharing` : "Nothing found that points to who sent it"}`}
         loading={busy}
         actions={
           <>
@@ -178,7 +179,7 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
           ))}
         </div>
         <aside className="flex w-[300px] shrink-0 flex-col gap-4">
-          <h2 className="text-[13px] font-semibold tracking-tight">Before you publish</h2>
+          <h2 className="text-[13px] font-semibold tracking-tight">Before you share</h2>
           <Finding title="Hidden details" ok={r.metadata.length === 0} okText="No author, device or software details found.">
             <ul className="mt-2 flex flex-col gap-1.5">
               {r.metadata.map((m) => (
@@ -202,7 +203,7 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
             ))}
           </Finding>
           <Notice>
-            Before publishing, think about timing and quoting. If few people saw this document, publishing soon after they did, or quoting its exact wording, can point to them. Paraphrase where you can.
+            Before sharing, think about timing and quoting. If few people saw this document, sharing it soon after they did, or quoting its exact wording, can point to them. Paraphrase where you can.
           </Notice>
         </aside>
       </div>
@@ -259,7 +260,7 @@ function CompareDialog({ open, onClose, a, options }: { open: boolean; onClose: 
         onClose();
       }}
       title="Compare two versions"
-      description="Organisations sometimes give each person a slightly different copy to catch leaks. Passages that differ are the ones that could identify your source: paraphrase them, don't quote them."
+      description="Organisations sometimes give each person a slightly different copy to catch leaks. Passages that differ are the ones that could identify whoever passed it on: paraphrase them, don't quote them."
       width={620}
     >
       {options.length === 0 ? (

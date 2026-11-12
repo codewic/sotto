@@ -80,10 +80,16 @@ pub struct Agent {
     /// Travel-mode recovery entropy between "prepare" and "start". Never written to disk.
     pub travel: Mutex<Option<zeroize::Zeroizing<[u8; 32]>>>,
     pub unlock_failures: std::sync::atomic::AtomicU32,
+    /// Where this agent listens (`unix:/path/agent.sock` or `http://127.0.0.1:PORT`), so the app
+    /// can tell integrations where to post. Unset in tests.
+    pub endpoint: std::sync::OnceLock<String>,
 }
 
 impl Agent {
     pub fn new(dir: PathBuf, params: Params, default_relay: String, default_transport: Transport, token: String) -> Arc<Agent> {
+        // TLS for the call broker: install the crypto provider once, whoever builds the agent
+        // (the binary or a test). Installing twice is harmless.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (events, _) = broadcast::channel(1024);
         Arc::new(Agent {
             dir,
@@ -97,6 +103,7 @@ impl Agent {
             lifecycle: Mutex::new(()),
             travel: Mutex::new(None),
             unlock_failures: std::sync::atomic::AtomicU32::new(0),
+            endpoint: std::sync::OnceLock::new(),
         })
     }
 
@@ -106,6 +113,14 @@ impl Agent {
 
     pub fn touch(&self) {
         self.last_activity.store(sotto_core::time::now(), Ordering::Relaxed);
+    }
+
+    /// True when the current protection level turns calls off.
+    pub async fn calls_off(&self) -> bool {
+        match self.session.read().await.clone() {
+            Some(s) => s.settings.lock().await.risk_mode == RiskMode::Extreme,
+            None => true,
+        }
     }
 
     pub async fn session(&self) -> Result<Arc<Session>, ApiError> {
@@ -194,7 +209,26 @@ impl Agent {
             loop {
                 match rx.recv().await {
                     Ok(sotto_client::Event::Extension { contact_id, payload }) => crate::cases::on_extension(&me, contact_id, payload).await,
-                    Ok(e) => me.emit(serde_json::to_value(&e).unwrap_or(Value::Null)),
+                    // Calls are off in Extreme mode: refuse before anything rings.
+                    Ok(sotto_client::Event::Call { call }) if call.phase == sotto_client::calls::Phase::Ringing && me.calls_off().await => {
+                        if let (Ok(s), Ok(id)) = (me.session().await, sotto_core::unhex::<16>(&call.id)) {
+                            s.engine.refuse_call(&id).await;
+                        }
+                    }
+                    Ok(e) => {
+                        if matches!(e, sotto_client::Event::Contacts) {
+                            let me2 = me.clone();
+                            tokio::spawn(async move { crate::avatars::sync(&me2).await });
+                        }
+                        if let sotto_client::Event::Contact { id } = &e {
+                            let (me2, id) = (me.clone(), id.clone());
+                            tokio::spawn(async move {
+                                crate::tags::on_contact(&me2, &id).await;
+                                crate::avatars::on_contact(&me2, &id).await;
+                            });
+                        }
+                        me.emit(serde_json::to_value(&e).unwrap_or(Value::Null))
+                    }
                     Err(broadcast::error::RecvError::Lagged(_)) => me.emit(json!({ "type": "resync" })),
                     Err(_) => break,
                 }
@@ -243,7 +277,9 @@ pub fn spawn_background(agent: Arc<Agent>) {
             let _ = s.engine.sweep_expired().await;
             let minutes = s.settings.lock().await.effective_lock_minutes() as u64;
             let idle = sotto_core::time::now().saturating_sub(agent.last_activity.load(Ordering::Relaxed));
-            if idle >= minutes * 60 {
+            // Someone talking on a call isn't idle: don't lock under them.
+            let on_call = !s.engine.calls().await.is_empty();
+            if idle >= minutes * 60 && !on_call {
                 drop(s);
                 agent.lock().await;
             }

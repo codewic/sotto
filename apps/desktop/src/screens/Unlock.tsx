@@ -6,6 +6,7 @@ import { SpotLocked } from "../brand/spots";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { Field } from "../ui/Field";
+import { forgetAppearance } from "../theme/appearance";
 
 export function Unlock() {
   const qc = useQueryClient();
@@ -68,7 +69,7 @@ export function EraseDialog({ open, onClose }: { open: boolean; onClose: () => v
         onClose();
       }}
       title="Erase Sotto from this device?"
-      description="Every conversation, file, case and key on this device is destroyed at once. This can't be undone, and nothing is kept anywhere else."
+      description="Every conversation, file, project and key on this device is destroyed at once. This can't be undone, and nothing is kept anywhere else."
     >
       <form
         onSubmit={async (e) => {
@@ -76,6 +77,7 @@ export function EraseDialog({ open, onClose }: { open: boolean; onClose: () => v
           setBusy(true);
           try {
             await post("/api/panic");
+            forgetAppearance();
             await qc.invalidateQueries();
             onClose();
           } finally {
