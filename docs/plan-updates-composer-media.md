@@ -1,6 +1,6 @@
 # Plan: signed updates, a richer composer, media, and Files
 
-Status: proposed (12 November 2026). Nothing here is built yet.
+Status: section 1 (signed updates) is built (12 November 2026), see `docs/releasing.md`; sections 2 to 4 are next. The owner chose the recommended answer to every decision below.
 
 The ask was auto-update with a GitHub releases repository, a feature-rich composer, media sharing, and a file manager with a viewer. This plan keeps all four and adds the parts a security product needs so that none of them becomes the weak point: updates that GitHub can't tamper with, update checks that don't reveal who uses Sotto, media that can't attack the device that opens it, and files that stay encrypted and quarantined however they're browsed.
 

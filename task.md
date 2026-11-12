@@ -10,6 +10,13 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 
 - [x] Tags (`@ada`) for inviting without a link, contact requests, generated default avatars for everyone, a 960-avatar collection with a picker shared with contacts, and the Contours wallpaper by default (`docs/tags-and-avatars.md`)
 
+## Releases and updates (`docs/releasing.md`)
+- [x] `codewic/sotto` (private) and `codewic/sotto-releases` (public); release key made on the owner's machine, public half pinned
+- [x] Signed automatic updates: agent checks and stages (`updates.rs`), shell re-verifies and installs, update notice and About panel; test `updates_install_only_signed_matching_packages`
+- [x] Release workflow builds AppImage and .deb into an unsigned draft; `sotto-release publish` checks, signs and publishes
+- [ ] Windows installer (the agent and review sandbox are Linux-only today) and macOS (needs an Apple developer account)
+- [ ] Next from the plan: composer, media, Files (`docs/plan-updates-composer-media.md`)
+
 ## Phase 0: foundations
 - [x] Threat model, protocol spec, Rust workspace, pinned toolchain, release profile
 - [ ] Outside cryptographer review (owner action)
