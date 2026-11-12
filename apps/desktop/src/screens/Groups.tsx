@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellOff, Check, ChevronLeft, Copy, Info, MoreHorizontal, Paperclip, Pencil, Phone, Pin, PinOff, Reply, Search, SendHorizontal, Shield, ShieldOff, Trash2, UserMinus, Users, X } from "lucide-react";
+import { AtSign, BellOff, Check, ChevronLeft, Copy, Info, MoreHorizontal, Paperclip, Pencil, Phone, Pin, PinOff, Reply, Search, Shield, ShieldOff, Trash2, UserMinus, Users, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { type ApiError, api, del, get, patch, post } from "../api";
+import { type ApiError, del, get, patch, post } from "../api";
 import type { Contact, GroupView, Message } from "../types";
 import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -11,6 +11,7 @@ import { Avatar, seedOf } from "../ui/Avatar";
 import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
+import { Composer, type ComposerHandle, DraftLine, type Member, uploadFile } from "../ui/Composer";
 import { useCalls } from "./Calls";
 import { contactName } from "./ConversationDialogs";
 import { Bubble, ContextMenu, MenuItem } from "./Conversations";
@@ -63,9 +64,22 @@ export function GroupRow({ g, active, onOpen }: { g: GroupView; active: boolean;
           {g.muted && <BellOff size={12} className="shrink-0 text-muted-foreground" aria-label="Muted" />}
         </span>
         <span className="mt-0.5 flex items-center gap-2">
-          <span className="truncate text-[13px] text-muted-foreground">{g.removed ? "You're no longer in this group" : plain(g.preview) || `${g.member_count} members`}</span>
+          <span className="truncate text-[13px] text-muted-foreground">
+            {g.removed ? (
+              "You're no longer in this group"
+            ) : (
+              <DraftLine draftKey={`g:${g.id}`} off={active}>
+                {plain(g.preview) || `${g.member_count} members`}
+              </DraftLine>
+            )}
+          </span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <span className="text-[11.5px] text-muted-foreground tabular">{listTime(g.preview_at || g.last_activity)}</span>
+            {g.mentions > 0 && (
+              <span className="grid size-5 place-items-center rounded-full bg-primary text-primary-foreground" role="img" aria-label={g.mentions === 1 ? "You were mentioned" : `You were mentioned ${g.mentions} times`} title="You were mentioned">
+                <AtSign size={12} strokeWidth={2.5} />
+              </span>
+            )}
             {g.unread > 0 && (
               <span className={`min-w-5 rounded-full px-1.5 text-center text-[11px] leading-5 font-semibold tabular ${g.muted ? "bg-muted-strong text-muted-foreground" : "bg-primary text-primary-foreground"}`}>{g.unread}</span>
             )}
@@ -101,13 +115,11 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   const toast = useToast();
   const calls = useCalls();
   const messages = useQuery({ queryKey: ["group-messages", group.id], queryFn: () => get<Message[]>(`/api/groups/${group.id}/messages`) });
-  const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [info, setInfo] = useState(false);
-  const [sending, setSending] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const list = useMemo(() => messages.data ?? [], [messages.data]);
   const byId = useMemo(() => new Map(list.map((m) => [m.id, m])), [list]);
   const days = useMemo(() => arrange(list), [list]);
@@ -118,7 +130,6 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   const [dragging, setDragging] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [pinIndex, setPinIndex] = useState(0);
-  const fileInput = useRef<HTMLInputElement>(null);
   const searchable = useMemo(() => list.filter((m) => m.kind !== "system"), [list]);
   const search = useThreadSearch(searchable, (m) => `${m.text ?? ""} ${m.file?.name ?? ""} ${m.file?.caption ?? ""} ${m.author ?? ""}`, (m) => m.id, scroller, "data-mid");
   // Newest pin first; clicking the bar jumps to it and moves to the next older one.
@@ -146,23 +157,18 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
     void qc.invalidateQueries({ queryKey: ["groups"] });
   };
 
-  async function send() {
-    const body = text.trim();
-    if (!body || sending) return;
-    setSending(true);
-    try {
-      if (editing) await patch(`/api/groups/${group.id}/messages/${editing.id}`, { text: body });
-      else await post(`/api/groups/${group.id}/messages`, { text: body, reply_to: replyTo?.id ?? null });
-      setText("");
-      setReplyTo(null);
-      setEditing(null);
-      refresh();
-    } catch (e) {
-      toast("error", (e as ApiError).message);
-    } finally {
-      setSending(false);
-      input.current?.focus();
-    }
+  async function sendText(body: string) {
+    if (editing) await patch(`/api/groups/${group.id}/messages/${editing.id}`, { text: body });
+    else await post(`/api/groups/${group.id}/messages`, { text: body, reply_to: replyTo?.id ?? null });
+    setReplyTo(null);
+    setEditing(null);
+    refresh();
+  }
+
+  async function sendFile(file: File, caption: string) {
+    await uploadFile(`/api/groups/${group.id}/files`, file, caption);
+    setReplyTo(null);
+    refresh();
   }
 
   const react = (m: Message, emoji: string) =>
@@ -173,8 +179,10 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   const startEdit = (m: Message) => {
     setReplyTo(null);
     setEditing(m);
-    setText(m.text ?? "");
-    input.current?.focus();
+    requestAnimationFrame(() => {
+      composer.current?.setText(m.text ?? "");
+      composer.current?.focus();
+    });
   };
 
   async function review(m: Message) {
@@ -186,24 +194,6 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
       toast("error", (e as ApiError).message);
     } finally {
       setReviewing(null);
-    }
-  }
-
-  async function sendFile(file: File) {
-    setSending(true);
-    try {
-      await api("POST", `/api/groups/${group.id}/files`, new Uint8Array(await file.arrayBuffer()), {
-        "content-type": file.type || "application/octet-stream",
-        "x-file-name": encodeURIComponent(file.name),
-        "x-caption": encodeURIComponent(text.trim()),
-      });
-      setText("");
-      setReplyTo(null);
-      refresh();
-    } catch (e) {
-      toast("error", (e as ApiError).message);
-    } finally {
-      setSending(false);
     }
   }
 
@@ -221,6 +211,19 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   // Members who are also your conversations can be called together.
   const callable = group.members.map((m) => contacts.find((c) => c.id === m.contact_id && c.state === "ready")).filter((c): c is Contact => !!c);
   const noun = group.member_count === 1 ? "member" : "members";
+  // Who you can @mention: everyone who has joined, except you.
+  const mentionable: Member[] = useMemo(
+    () =>
+      group.members
+        .filter((m) => !m.you && !m.pending)
+        .map((m) => {
+          const local = contacts.find((c) => c.id === m.contact_id);
+          return { name: m.name, seed: local ? seedOf(local) : `member:${m.name}`, choice: local?.avatar };
+        }),
+    [group.members, contacts],
+  );
+  const callBusy = calls.calls.some((c) => c.phase !== "ended");
+  const mentionNames = useMemo(() => ({ names: group.members.map((m) => m.name), me: group.members.find((m) => m.you)?.name }), [group.members]);
 
   return (
     <div className="@container/thread relative flex min-h-0 flex-1">
@@ -237,8 +240,10 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          const f = e.dataTransfer.files[0];
-          if (f && !group.removed) void sendFile(f);
+          if (!group.removed && e.dataTransfer.files.length) {
+            setEditing(null);
+            composer.current?.addFiles(Array.from(e.dataTransfer.files));
+          }
         }}
       >
         <header className="flex h-16 shrink-0 items-center gap-3 px-4">
@@ -326,12 +331,13 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                           last={i === run.length - 1}
                           reply={m.reply_to ? byId.get(m.reply_to) : undefined}
                           replyName={(r) => (r.outgoing ? "You" : (r.author ?? "Someone"))}
+                          mentions={mentionNames}
                           flash={flash === m.id || search.current === m.id}
                           reviewing={reviewing === m.id}
                           onReply={() => {
                             setEditing(null);
                             setReplyTo(m);
-                            input.current?.focus();
+                            composer.current?.focus();
                           }}
                           onReact={(e) => void react(m, e)}
                           onEdit={() => startEdit(m)}
@@ -354,89 +360,46 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
           {group.removed ? (
             <Notice>You're no longer in this group. You can still read what you had, or delete it from the group info.</Notice>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send();
-              }}
-              className="rounded-2xl bg-[var(--composer)] shadow-[var(--composer-shadow)]"
-            >
-              {(replyTo || editing) && (
-                <div className="flex items-center gap-3 border-b border-line px-4 py-2">
-                  <span className="h-8 w-0.5 rounded-full bg-primary" aria-hidden="true" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[12px] font-semibold text-primary">{editing ? "Editing your message" : `Replying to ${replyTo?.outgoing ? "yourself" : replyTo?.author}`}</div>
-                    <div className="truncate text-[12.5px] text-muted-foreground">{(editing ?? replyTo)?.text}</div>
-                  </div>
-                  <IconButton
-                    label="Cancel"
-                    onClick={() => {
-                      setReplyTo(null);
-                      setEditing(null);
-                      if (editing) setText("");
-                    }}
-                  >
-                    <X size={16} />
-                  </IconButton>
-                </div>
-              )}
-              <div className="flex items-end gap-1.5 p-2">
-                {!editing && (
-                  <>
-                    <IconButton label="Attach a file" onClick={() => fileInput.current?.click()} disabled={sending}>
-                      <Paperclip size={17} />
-                    </IconButton>
-                    <input
-                      ref={fileInput}
-                      type="file"
-                      hidden
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        e.target.value = "";
-                        if (f) void sendFile(f);
-                      }}
-                    />
-                  </>
-                )}
-                <textarea
-                  ref={input}
-                  value={text}
-                  rows={1}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                    if (e.key === "Escape") {
-                      setReplyTo(null);
-                      if (editing) {
+            <Composer
+              handle={composer}
+              draftKey={`g:${group.id}`}
+              placeholder={`Message ${group.title}`}
+              editing={!!editing}
+              banner={
+                (replyTo || editing) && (
+                  <div className="flex items-center gap-3 border-b border-line px-4 py-2">
+                    {editing ? <Pencil size={15} className="text-primary" /> : <Reply size={15} className="text-primary" />}
+                    <div className="min-w-0 flex-1 border-l-2 border-primary pl-2.5">
+                      <div className="text-[12px] font-semibold text-primary">{editing ? "Editing" : `Replying to ${replyTo?.outgoing ? "yourself" : (replyTo?.author ?? "someone")}`}</div>
+                      <div className="truncate text-[12.5px] text-muted-foreground">{plain((editing ?? replyTo)?.text ?? (editing ?? replyTo)?.file?.name ?? "")}</div>
+                    </div>
+                    <IconButton
+                      label="Cancel"
+                      type="button"
+                      onClick={() => {
+                        setReplyTo(null);
                         setEditing(null);
-                        setText("");
-                      }
-                    }
-                    if (e.key === "ArrowUp" && !text) {
-                      const mine = [...list].reverse().find((m) => m.outgoing && m.kind === "text");
-                      if (mine) {
-                        e.preventDefault();
-                        startEdit(mine);
-                      }
-                    }
-                  }}
-                  placeholder={`Message ${group.title}`}
-                  aria-label="Message"
-                  className="max-h-48 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 text-[length:var(--msg-size)] leading-relaxed outline-none placeholder:truncate placeholder:text-muted-foreground"
-                />
-                <button
-                  type="submit"
-                  disabled={sending || !text.trim()}
-                  aria-label={editing ? "Save edit" : "Send"}
-                  className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
-                </button>
-              </div>
-            </form>
+                      }}
+                    >
+                      <X size={15} />
+                    </IconButton>
+                  </div>
+                )
+              }
+              onSendText={sendText}
+              onSendFile={sendFile}
+              onEscape={() => {
+                setReplyTo(null);
+                setEditing(null);
+              }}
+              onArrowUpEmpty={() => {
+                const mine = [...list].reverse().find((m) => m.outgoing && m.kind === "text");
+                if (mine) startEdit(mine);
+              }}
+              members={mentionable}
+              commands={callable.length && !callBusy ? [{ name: "call", hint: "Call everyone you can reach in this group", run: () => void calls.call(callable[0], callable.slice(1)) }] : []}
+              schedule={{ kind: "g", target: group.id }}
+            />
           )}
         </div>
       </div>
@@ -458,7 +421,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
               onClick={() => {
                 setEditing(null);
                 setReplyTo(menu.m);
-                input.current?.focus();
+                composer.current?.focus();
               }}
             >
               Reply

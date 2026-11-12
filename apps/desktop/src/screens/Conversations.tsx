@@ -18,7 +18,6 @@ import {
   Pin,
   AtSign,
   Search,
-  SendHorizontal,
   ShieldAlert,
   SmilePlus,
   Trash2,
@@ -28,18 +27,19 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, del, get, patch, post } from "../api";
+import { del, get, patch, post } from "../api";
 import { SpotConversations } from "../brand/spots";
 import type { ChannelView, Contact, GroupView, Message, SecretView } from "../types";
 import { useAppearance } from "../theme/appearance";
 import { Wallpaper } from "../theme/Wallpaper";
 import { Button, IconButton } from "../ui/Button";
 import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
-import { Rich, plain } from "../ui/Rich";
+import { type Mentions, Rich, plain } from "../ui/Rich";
 import { Avatar as AvatarMark, seedOf } from "../ui/Avatar";
 import { SecretCard, SendSecretDialog, secretItem } from "./Secrets";
 import { Chip, Empty, Kbd, Notice, Skeleton, Switch, bytes, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
+import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
 import { AcceptDialog, DeleteDialog, InviteDialog, RenameDialog, SafetyDialog, contactName as name } from "./ConversationDialogs";
 import { useCalls } from "./Calls";
 import { BroadcastGlyph, ChannelRow, ChannelThread, NewChannelDialog } from "./Channels";
@@ -49,7 +49,6 @@ import { useNav } from "./Shell";
 const REACTIONS = ["👍", "❤️", "😂", "😮", "🙏", "✅"];
 const GROUP_MS = 5 * 60 * 1000;
 // Drafts live in memory for this session only: they may hold sensitive text, so they never touch storage.
-const drafts = new Map<string, string>();
 
 type Filter = "all" | "unread" | "groups" | "channels" | "pinned" | "archived";
 
@@ -401,7 +400,11 @@ function ChatRow({ c, active, onOpen, onMenu }: { c: Contact; active: boolean; o
             <span className={`ml-auto shrink-0 text-[12px] tabular transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 ${c.unread ? "font-medium text-primary" : "text-muted-foreground"}`}>{listTime(c.preview_at)}</span>
           </span>
           <span className="mt-0.5 flex items-center gap-2">
-            <span className={`truncate text-[13px] ${c.unread ? "text-foreground" : "text-muted-foreground"}`}>{preview}</span>
+            <span className={`truncate text-[13px] ${c.unread ? "text-foreground" : "text-muted-foreground"}`}>
+              <DraftLine draftKey={`c:${c.id}`} off={active}>
+                {preview}
+              </DraftLine>
+            </span>
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {c.pinned && !c.unread && <Pin size={12} className="text-muted-foreground" aria-label="Pinned" />}
               {c.unread > 0 && <span className="min-w-5 rounded-full bg-primary px-1.5 text-center text-[11px] leading-5 font-semibold text-primary-foreground tabular">{c.unread}</span>}
@@ -449,11 +452,8 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
   // The info panel docks beside the thread only when there is room for both.
   const floatInfo = useBelow(1360);
   const messages = useQuery({ queryKey: ["messages", contact.id], queryFn: () => get<Message[]>(`/api/contacts/${contact.id}/messages`) });
-  const [text, setText] = useState(() => drafts.get(contact.id) ?? "");
-  const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
-  const [pending, setPending] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [info, setInfo] = useState(false);
   const [dialog, setDialog] = useState<"safety" | "rename" | "delete" | null>(null);
@@ -463,8 +463,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
   const [missed, setMissed] = useState(0);
   const [flash, setFlash] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const firstUnread = useRef<string | null | undefined>(undefined);
   const ready = contact.state === "ready";
   const list = useMemo(() => messages.data ?? [], [messages.data]);
@@ -485,10 +484,6 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
     const unread = list.filter((m) => !m.outgoing && m.kind !== "system");
     firstUnread.current = contact.unread > 0 ? (unread[unread.length - contact.unread]?.id ?? null) : null;
   }
-
-  useEffect(() => {
-    drafts.set(contact.id, text);
-  }, [contact.id, text]);
 
   useEffect(() => {
     if (contact.unread > 0) void post(`/api/contacts/${contact.id}/read`).then(() => qc.invalidateQueries({ queryKey: ["contacts"] }));
@@ -521,15 +516,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
     setTimeout(() => setFlash(null), 1200);
   }, []);
 
-  async function send() {
-    const body = text.trim();
-    if (sending) return;
-    if (pending) {
-      await sendFile(pending, body);
-      return;
-    }
-    if (!body) return;
-    setSending(true);
+  async function sendText(body: string) {
     try {
       if (editing) {
         await patch(`/api/contacts/${contact.id}/messages/${editing.id}`, { text: body });
@@ -538,31 +525,8 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
         await post(`/api/contacts/${contact.id}/messages`, { text: body, reply_to: replyTo?.id ?? null });
         setReplyTo(null);
       }
-      setText("");
-    } catch (e) {
-      toast("error", (e as Error).message);
     } finally {
-      setSending(false);
       qc.invalidateQueries({ queryKey: ["messages", contact.id] });
-      input.current?.focus();
-    }
-  }
-
-  async function sendFile(file: File, caption: string) {
-    setSending(true);
-    try {
-      const data = new Uint8Array(await file.arrayBuffer());
-      await api("POST", `/api/contacts/${contact.id}/files`, data, {
-        "content-type": file.type || "application/octet-stream",
-        "x-file-name": encodeURIComponent(file.name),
-        "x-caption": encodeURIComponent(caption),
-      });
-      setPending(null);
-      setText("");
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setSending(false);
     }
   }
 
@@ -589,10 +553,12 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
 
   function startEdit(m: Message) {
     setReplyTo(null);
-    setPending(null);
     setEditing(m);
-    setText(m.text ?? "");
-    requestAnimationFrame(() => input.current?.focus());
+    // After the composer knows it's editing, so the edit doesn't overwrite your draft.
+    requestAnimationFrame(() => {
+      composer.current?.setText(m.text ?? "");
+      composer.current?.focus();
+    });
   }
 
   async function remove(m: Message, both: boolean) {
@@ -630,11 +596,9 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          const f = e.dataTransfer.files[0];
-          if (f && ready) {
-            setPending(f);
+          if (ready && e.dataTransfer.files.length) {
             setEditing(null);
-            input.current?.focus();
+            composer.current?.addFiles(Array.from(e.dataTransfer.files));
           }
         }}
       >
@@ -736,7 +700,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                           onReply={() => {
                             setEditing(null);
                             setReplyTo(m);
-                            input.current?.focus();
+                            composer.current?.focus();
                           }}
                           onReact={(e) => react(m, e)}
                           onEdit={() => startEdit(m)}
@@ -769,110 +733,54 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
         )}
         <div className="relative shrink-0 px-4 pt-1 pb-4 sm:px-8">
           {ready ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send();
+            <Composer
+              handle={composer}
+              draftKey={`c:${contact.id}`}
+              placeholder={`Message ${name(contact)}`}
+              editing={!!editing}
+              autoFocus
+              banner={
+                (replyTo || editing) && (
+                  <div className="flex items-center gap-3 border-b border-line px-4 py-2">
+                    {editing ? <Pencil size={15} className="text-primary" /> : <CornerUpLeft size={15} className="text-primary" />}
+                    <div className="min-w-0 flex-1 border-l-2 border-primary pl-2.5">
+                      <div className="text-[12px] font-semibold text-primary">{editing ? "Editing" : `Replying to ${replyTo!.outgoing ? "yourself" : name(contact)}`}</div>
+                      <div className="truncate text-[12.5px] text-muted-foreground">{plain((editing ?? replyTo)!.text ?? (editing ?? replyTo)!.file?.name ?? "")}</div>
+                    </div>
+                    <IconButton
+                      label="Cancel"
+                      type="button"
+                      onClick={() => {
+                        setEditing(null);
+                        setReplyTo(null);
+                      }}
+                    >
+                      <X size={15} />
+                    </IconButton>
+                  </div>
+                )
+              }
+              onSendText={sendText}
+              onSendFile={(f, caption) => uploadFile(`/api/contacts/${contact.id}/files`, f, caption)}
+              onEscape={() => {
+                setEditing(null);
+                setReplyTo(null);
               }}
-              className="rounded-2xl bg-[var(--composer)] shadow-[var(--composer-shadow)]"
-            >
-              {(replyTo || editing) && (
-                <div className="flex items-center gap-3 border-b border-line px-4 py-2">
-                  {editing ? <Pencil size={15} className="text-primary" /> : <CornerUpLeft size={15} className="text-primary" />}
-                  <div className="min-w-0 flex-1 border-l-2 border-primary pl-2.5">
-                    <div className="text-[12px] font-semibold text-primary">{editing ? "Editing" : `Replying to ${replyTo!.outgoing ? "yourself" : name(contact)}`}</div>
-                    <div className="truncate text-[12.5px] text-muted-foreground">{plain((editing ?? replyTo)!.text ?? (editing ?? replyTo)!.file?.name ?? "")}</div>
-                  </div>
-                  <IconButton
-                    label="Cancel"
-                    type="button"
-                    onClick={() => {
-                      if (editing) setText("");
-                      setEditing(null);
-                      setReplyTo(null);
-                    }}
-                  >
-                    <X size={15} />
-                  </IconButton>
-                </div>
-              )}
-              {pending && (
-                <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
-                  <span className="grid size-9 place-items-center rounded-lg bg-pane">
-                    <FileText size={17} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13.5px] font-medium">{pending.name}</div>
-                    <div className="text-[12px] text-muted-foreground">{bytes(pending.size)} · encrypted before it leaves this computer</div>
-                  </div>
-                  <IconButton label="Remove file" type="button" onClick={() => setPending(null)}>
-                    <X size={15} />
-                  </IconButton>
-                </div>
-              )}
-              <div className="flex items-end gap-1.5 p-2">
-                <IconButton label="Attach a file" type="button" onClick={() => fileInput.current?.click()}>
-                  <Paperclip size={17} />
+              onArrowUpEmpty={() => {
+                const mine = [...list].reverse().find((m) => m.outgoing && m.kind === "text");
+                if (mine) startEdit(mine);
+              }}
+              extra={
+                <IconButton label="Send a one-time secret" type="button" onClick={() => setSendingSecret(true)}>
+                  <KeyRound size={17} />
                 </IconButton>
-                {ready && !editing && (
-                  <IconButton label="Send a one-time secret" type="button" onClick={() => setSendingSecret(true)}>
-                    <KeyRound size={17} />
-                  </IconButton>
-                )}
-                <input
-                  ref={fileInput}
-                  type="file"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) setPending(f);
-                    e.target.value = "";
-                  }}
-                />
-                <textarea
-                  ref={input}
-                  value={text}
-                  autoFocus
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    } else if (e.key === "Escape") {
-                      if (editing) setText("");
-                      setEditing(null);
-                      setReplyTo(null);
-                      setPending(null);
-                    } else if (e.key === "ArrowUp" && !text) {
-                      const mine = [...list].reverse().find((m) => m.outgoing && m.kind === "text");
-                      if (mine) {
-                        e.preventDefault();
-                        startEdit(mine);
-                      }
-                    }
-                  }}
-                  onPaste={(e) => {
-                    const f = e.clipboardData.files[0];
-                    if (f) {
-                      e.preventDefault();
-                      setPending(f);
-                    }
-                  }}
-                  rows={Math.min(8, Math.max(1, text.split("\n").length))}
-                  placeholder={pending ? "Add a caption (optional)" : `Message ${name(contact)}`}
-                  aria-label="Message"
-                  className="max-h-48 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 text-[length:var(--msg-size)] leading-relaxed outline-none placeholder:truncate placeholder:text-muted-foreground"
-                />
-                <button
-                  type="submit"
-                  disabled={sending || (!text.trim() && !pending)}
-                  aria-label={editing ? "Save edit" : "Send"}
-                  className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
-                </button>
-              </div>
-            </form>
+              }
+              commands={[
+                { name: "secret", hint: "Send a one-time secret, like a password", run: () => setSendingSecret(true) },
+                ...(calls.calls.some((c) => c.phase !== "ended") ? [] : [{ name: "call", hint: `Call ${name(contact)}`, run: () => void calls.call(contact) }]),
+              ]}
+              schedule={{ kind: "c", target: contact.id }}
+            />
           ) : (
             <Notice>Waiting for {name(contact)} to accept your invite. Send them the link or show the QR code again from the invite you created.</Notice>
           )}
@@ -1024,6 +932,8 @@ function Ticks({ m }: { m: Message }) {
 }
 
 export function Bubble(props: {
+  /** Group members' names, so @mentions stand out (yours most). */
+  mentions?: Mentions;
   m: Message;
   first: boolean;
   last: boolean;
@@ -1085,7 +995,7 @@ export function Bubble(props: {
         )}
         {m.kind === "text" && (
           <div className="break-words whitespace-pre-wrap">
-            <Rich text={m.text ?? ""} />
+            <Rich text={m.text ?? ""} mentions={props.mentions} />
             <span className="invisible ml-2 inline-flex items-center gap-1 text-[11px]" aria-hidden="true">
               {meta}
             </span>
@@ -1106,7 +1016,7 @@ export function Bubble(props: {
                 </div>
               </div>
             </div>
-            {m.file.caption && <div className="whitespace-pre-wrap"><Rich text={m.file.caption} /></div>}
+            {m.file.caption && <div className="whitespace-pre-wrap"><Rich text={m.file.caption} mentions={props.mentions} /></div>}
             {!mine && m.file.status === "ready" && m.file.review.state === "quarantined" && (
               <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--bubble-inset)] px-3 py-2">
                 <span className="text-[12.5px] text-muted-foreground">Quarantined until reviewed</span>

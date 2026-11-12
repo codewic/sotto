@@ -132,6 +132,43 @@ fn gh(args: &[&str]) -> Result<(), String> {
     if ok { Ok(()) } else { Err(format!("gh {} failed", args.join(" "))) }
 }
 
+fn gh_out(args: &[&str]) -> Result<String, String> {
+    let o = Command::new("gh").args(args).output().map_err(|e| format!("couldn't run gh: {e}"))?;
+    if o.status.success() { Ok(String::from_utf8_lossy(&o.stdout).to_string()) } else { Err(format!("gh {} failed: {}", args.join(" "), String::from_utf8_lossy(&o.stderr).trim())) }
+}
+
+/// Upload to a draft, check GitHub has every file at the right size, and only then publish. Big
+/// uploads can fail partway, and a release missing its packages must never go out.
+fn release(tag: &str, notes: &str, assets: &[String]) -> Result<(), String> {
+    let exists = gh_out(&["release", "view", tag, "--repo", RELEASES_REPO, "--json", "isDraft"]).is_ok();
+    if !exists {
+        gh(&["release", "create", tag, "--repo", RELEASES_REPO, "--title", tag, "--notes-file", notes, "--draft"])?;
+    }
+    for a in assets {
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            match gh(&["release", "upload", tag, a.as_str(), "--repo", RELEASES_REPO, "--clobber"]) {
+                Ok(()) => break,
+                Err(e) if tries >= 3 => return Err(e),
+                Err(_) => eprintln!("  upload of {a} failed, trying again ({tries} of 3)"),
+            }
+        }
+    }
+    let view = gh_out(&["release", "view", tag, "--repo", RELEASES_REPO, "--json", "assets"])?;
+    let v: Value = serde_json::from_str(&view).map_err(|_| "couldn't read the release from GitHub".to_string())?;
+    let up = v["assets"].as_array().cloned().unwrap_or_default();
+    for a in assets {
+        let p = Path::new(a);
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        if !up.iter().any(|x| x["name"].as_str() == Some(name.as_str()) && x["size"].as_u64() == Some(size)) {
+            return Err(format!("{name} isn't on the release at its full size; it stays a draft"));
+        }
+    }
+    gh(&["release", "edit", tag, "--repo", RELEASES_REPO, "--draft=false", "--latest"])
+}
+
 fn publish(tag: &str) -> ExitCode {
     let seed = match read_seed() {
         Ok(s) => s,
@@ -183,13 +220,8 @@ fn publish(tag: &str) -> ExitCode {
     assets.push(sig_path.to_string_lossy().to_string());
     let notes = work.join("notes.md");
     let _ = std::fs::write(&notes, m["notes"].as_str().unwrap_or("").to_string() + "\n\nEvery file is listed with its SHA-256 in `latest.json`, which is signed with the Sotto release key (`latest.json.sig`). The app checks both before installing.\n");
-    let notes_s = notes.to_string_lossy().to_string();
-    let mut args = vec!["release", "create", tag, "--repo", RELEASES_REPO, "--title", tag, "--notes-file", notes_s.as_str()];
-    for a in &assets {
-        args.push(a);
-    }
     println!("Signed. Publishing {tag} to {RELEASES_REPO}…");
-    if let Err(e) = gh(&args) {
+    if let Err(e) = release(tag, &notes.to_string_lossy(), &assets) {
         return fail(e);
     }
     let _ = std::fs::remove_dir_all(&work);

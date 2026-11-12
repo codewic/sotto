@@ -16,21 +16,25 @@ const tone: Record<Kind, string> = {
  * Safe, minimal formatting: ``` fenced code with highlighting, *bold*, _italic_, `code`, and
  * "> " quote lines. Links are shown, never fetched or opened.
  */
-export function Rich({ text }: { text: string }) {
+export type Mentions = { names: string[]; me?: string };
+
+export function Rich({ text, mentions }: { text: string; mentions?: Mentions }) {
   return (
     <>
-      {segments(text).map((s, i) => (s.kind === "code" ? <CodeBlock key={i} lang={s.lang} code={s.code} /> : <Prose key={i} text={s.text} />))}
+      {segments(text).map((s, i) => (s.kind === "code" ? <CodeBlock key={i} lang={s.lang} code={s.code} /> : <Prose key={i} text={s.text} mentions={mentions} />))}
     </>
   );
 }
 
-function Prose({ text }: { text: string }) {
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function Prose({ text, mentions }: { text: string; mentions?: Mentions }) {
   const lines = text.split("\n");
   return (
     <>
       {lines.map((line, i) => {
         const quote = line.startsWith("> ");
-        const content = inline(quote ? line.slice(2) : line);
+        const content = inline(quote ? line.slice(2) : line, mentions);
         return (
           <Fragment key={i}>
             {quote ? <span className="my-0.5 block border-l-2 border-current/40 pl-2 opacity-80">{content}</span> : content}
@@ -93,9 +97,12 @@ export function plain(s: string) {
     .trim();
 }
 
-function inline(s: string): ReactNode[] {
+function inline(s: string, mentions?: Mentions): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(`[^`\n]+`)|(\*[^*\n]+\*)|(_[^_\n]+_)|(https?:\/\/[^\s]+)/g;
+  // Longest names first, so "@Ada Lovelace" wins over "@Ada".
+  const names = (mentions?.names ?? []).filter(Boolean).sort((a, b) => b.length - a.length).map(escape);
+  const at = names.length ? `|(@(?:${names.join("|")})(?![\\p{L}\\p{N}_]))` : "";
+  const re = new RegExp(`(\`[^\`\\n]+\`)|(\\*[^*\\n]+\\*)|(_[^_\\n]+_)|(https?:\\/\\/[^\\s]+)${at}`, "giu");
   let last = 0;
   let m: RegExpExecArray | null;
   let k = 0;
@@ -103,9 +110,16 @@ function inline(s: string): ReactNode[] {
     if (m.index > last) out.push(s.slice(last, m.index));
     const t = m[0];
     if (m[1]) out.push(<code key={k++} className="rounded bg-current/10 px-1 py-0.5 font-mono text-[0.88em]">{t.slice(1, -1)}</code>);
-    else if (m[2]) out.push(<strong key={k++}>{t.slice(1, -1)}</strong>);
-    else if (m[3]) out.push(<em key={k++}>{t.slice(1, -1)}</em>);
-    else out.push(<span key={k++} className="underline decoration-current/50 underline-offset-2" title="Links aren't opened from Sotto. Copy it into Tor Browser if you trust it.">{t}</span>);
+    else if (m[2]) out.push(<strong key={k++}>{inline(t.slice(1, -1), mentions)}</strong>);
+    else if (m[3]) out.push(<em key={k++}>{inline(t.slice(1, -1), mentions)}</em>);
+    else if (m[5]) {
+      const me = !!mentions?.me && t.slice(1).toLowerCase() === mentions.me.toLowerCase();
+      out.push(
+        <span key={k++} className={me ? "rounded-md bg-current/15 px-1 font-semibold" : "font-semibold"}>
+          {t}
+        </span>,
+      );
+    } else out.push(<span key={k++} className="underline decoration-current/50 underline-offset-2" title="Links aren't opened from Sotto. Copy it into Tor Browser if you trust it.">{t}</span>);
     last = m.index + t.length;
   }
   if (last < s.length) out.push(s.slice(last));

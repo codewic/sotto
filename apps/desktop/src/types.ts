@@ -94,6 +94,8 @@ export type GroupView = {
   muted: boolean;
   ttl_secs: number | null;
   unread: number;
+  /** Unread messages that @mention you (counted even when the group is muted). */
+  mentions: number;
   last_activity: number;
   preview: string;
   preview_at: number;

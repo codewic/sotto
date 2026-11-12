@@ -227,6 +227,7 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
     crate::secrets::start(s);
     crate::tags::start(agent, s);
     crate::updates::start(agent);
+    crate::scheduled::start(agent, s);
     let (a, sess) = (agent.clone(), s.clone());
     tokio::spawn(async move {
         while let Some(p) = rx.recv().await {

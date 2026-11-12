@@ -14,8 +14,9 @@ Releases are built by CI and signed by the owner. GitHub delivers them; the rele
 2. Write the notes in `docs/releases/vX.Y.Z.md`. They're shown in the app's update dialog and on the releases page.
 3. Commit, tag `vX.Y.Z` and push the tag (over SSH; the GitHub CLI's token can't push workflow files).
 4. CI (`.github/workflows/release.yml`) checks the tag matches both versions, builds the agent, sandbox renderer and `sotto-hook`, packages the AppImage and `.deb`, writes the unsigned `latest.json` and leaves a **draft** release in `codewic/sotto`.
-5. On the owner's machine: `cargo run -p sotto-release -- publish vX.Y.Z`. It downloads the draft, checks every file against `latest.json`, refuses to go on if the key isn't the pinned one, signs, and publishes everything with `latest.json.sig` to `codewic/sotto-releases`.
+5. On the owner's machine: `cargo run -p sotto-release -- publish vX.Y.Z`. It downloads the draft, checks every file against `latest.json`, refuses to go on if the key isn't the pinned one, signs, uploads everything with `latest.json.sig` to a draft in `codewic/sotto-releases` (retrying each file), checks GitHub has every file at its full size, and only then publishes. If a big upload fails it stays a draft; run the same command again.
 6. Check: `sotto-release verify latest.json latest.json.sig` on the published files.
+7. Update the Vorynza site (`vorynza-site/src/content/products.ts`, the `sotto` entry): the download links name the version (`Sotto-X.Y.Z-x86_64.AppImage`), so point them at the new release, and add the release to `src/app/changelog/page.tsx`.
 
 ## What the app does
 

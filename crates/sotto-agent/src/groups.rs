@@ -115,6 +115,31 @@ fn save_extra(s: &Session, gid: &Id, x: &Extra) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Whether `body` mentions `name` as `@name` (case-insensitive, not inside a longer word).
+fn mentions(body: &str, name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let (b, n) = (body.to_lowercase(), format!("@{}", name.to_lowercase()));
+    b.match_indices(&n).any(|(i, _)| {
+        let before = b[..i].chars().last();
+        let after = b[i + n.len()..].chars().next();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        before.is_none_or(|c| !word(c)) && after.is_none_or(|c| !word(c))
+    })
+}
+
+/// Unread mentions of you in a group, kept beside the record (cleared when you read it).
+fn mention_count(s: &Session, gid: &Id) -> u32 {
+    s.cases.get::<u32>(&format!("gmention/{}", hex(gid))).ok().flatten().unwrap_or(0)
+}
+
+fn add_mention(s: &Session, gid: &Id) -> Result<(), ApiError> {
+    s.cases.put(&format!("gmention/{}", hex(gid)), &(mention_count(s, gid) + 1))?;
+    Ok(())
+}
+
 /// Where a group message's file lives in `shared`.
 fn file_at(gid: &Id, mid: &Id) -> String {
     format!("g/{}/{}", hex(gid), hex(mid))
@@ -319,6 +344,12 @@ pub async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u6
                         };
                         put_msg(s, &g.id, &m)?;
                         g.unread = g.unread.saturating_add(1);
+                        // "@Ada" or "@Ada Mensah" (the name you sign with, or your display name).
+                        let me = rt.mls.as_ref().map(|m| name_in(m, &g.group_id)).unwrap_or_default();
+                        let shown = s.engine.profile().await.display_name;
+                        if mentions(&body, &me) || mentions(&body, &shown) {
+                            add_mention(s, &g.id)?;
+                        }
                         g.preview = format!("{author}: {}", body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect::<String>());
                         g.preview_at = time::now();
                         g.last_activity = time::now();
@@ -646,6 +677,7 @@ fn group_json(s: &Session, g: &GroupRecord, me: &str) -> Value {
         "am_admin": !g.owner && g.members.iter().any(|m| you(m) && admin(&m.name)),
         "pins": x.pins.iter().map(|p| hex(p)).collect::<Vec<_>>(),
         "muted": x.muted,
+        "mentions": mention_count(s, &g.id),
         "ttl_secs": g.ttl_secs,
         "unread": g.unread,
         "last_activity": g.last_activity,
@@ -716,8 +748,11 @@ async fn list(State(agent): A) -> R {
     let s = agent.session().await?;
     let mut v = records(&s);
     v.sort_by_key(|x| std::cmp::Reverse(x.last_activity));
-    let me = my_identity(&s).await;
-    Ok(Json(json!(v.iter().map(|g| group_json(&s, g, &me)).collect::<Vec<_>>())))
+    let mut out = Vec::with_capacity(v.len());
+    for g in &v {
+        out.push(group_json(&s, g, &my_name_in(&s, g).await));
+    }
+    Ok(Json(json!(out)))
 }
 
 #[derive(Deserialize)]
@@ -789,12 +824,13 @@ async fn create(State(agent): A, Json(b): Json<CreateIn>) -> R {
         let _ = s.engine.send_payload(id, &Payload::KeyPackageRequest { case_id: g.id }).await;
     }
     emit(&agent, &g);
-    Ok(Json(group_json(&s, &g, &my_identity(&s).await)))
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 async fn show(State(agent): A, Path(id): Path<String>) -> R {
     let s = agent.session().await?;
-    Ok(Json(group_json(&s, &record(&s, &gid(&id)?)?, &my_identity(&s).await)))
+    let g = record(&s, &gid(&id)?)?;
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 #[derive(Deserialize)]
@@ -859,7 +895,7 @@ async fn update(State(agent): A, Path(id): Path<String>, Json(b): Json<UpdateIn>
     }
     save(&s, &g)?;
     emit(&agent, &g);
-    Ok(Json(group_json(&s, &g, &my_identity(&s).await)))
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 /// Leave (a member) or delete for everyone (the creator). Either way this desk forgets the group.
@@ -882,6 +918,7 @@ async fn leave(State(agent): A, Path(id): Path<String>) -> R {
     }
     crate::shared::remove_all(&s, &format!("g/{}/", hex(&g.id)));
     s.cases.delete(&format!("gx/{}", hex(&g.id)))?;
+    let _ = s.cases.delete(&format!("gmention/{}", hex(&g.id)));
     s.cases.delete(&key(&g.id))?;
     agent.emit(json!({ "type": "group", "id": id }));
     Ok(Json(json!({ "ok": true })))
@@ -890,6 +927,7 @@ async fn leave(State(agent): A, Path(id): Path<String>) -> R {
 async fn read(State(agent): A, Path(id): Path<String>) -> R {
     let s = agent.session().await?;
     let mut g = record(&s, &gid(&id)?)?;
+    let _ = s.cases.delete(&format!("gmention/{}", hex(&g.id)));
     if g.unread > 0 {
         g.unread = 0;
         save(&s, &g)?;
@@ -898,14 +936,20 @@ async fn read(State(agent): A, Path(id): Path<String>) -> R {
     Ok(Json(json!({ "ok": true })))
 }
 
-/// The name this desk signs with in every group (its MLS identity). Member lists use it, so it
-/// identifies "you" even after the display name changes.
-async fn my_identity(s: &Session) -> String {
+/// The name this desk signed into one group. It's found by our signature key, so it stays right
+/// after you rename yourself (a group keeps the name you joined with until you rejoin).
+fn name_in(mls: &sotto_cases::Mls, group_id: &[u8]) -> String {
+    let key = mls.signature_key();
+    let named = mls.member_keys(group_id).ok().and_then(|ks| ks.into_iter().find(|(_, k)| *k == key)).map(|(n, _)| n);
+    String::from_utf8_lossy(named.as_deref().unwrap_or(mls.identity())).to_string()
+}
+
+async fn my_name_in(s: &Session, g: &GroupRecord) -> String {
     let mut rt = s.cases_rt.lock().await;
     if ensure_mls(s, &mut rt).await.is_err() {
         return String::new();
     }
-    rt.mls.as_ref().map(|m| String::from_utf8_lossy(m.identity()).to_string()).unwrap_or_default()
+    rt.mls.as_ref().map(|m| name_in(m, &g.group_id)).unwrap_or_default()
 }
 
 async fn my_key(s: &Session) -> Result<Vec<u8>, ApiError> {
@@ -1090,7 +1134,7 @@ async fn add_member(State(agent): A, Path(id): Path<String>, Json(b): Json<Membe
     save(&s, &g)?;
     s.engine.send_payload(&contact, &Payload::KeyPackageRequest { case_id: g.id }).await?;
     emit(&agent, &g);
-    Ok(Json(group_json(&s, &g, &my_identity(&s).await)))
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 /// `who` is the member's conversation id (if you have one with them) or their name in the group.
@@ -1123,7 +1167,7 @@ async fn remove_member(State(agent): A, Path((id, who)): Path<(String, String)>)
     drop(rt);
     save(&s, &g)?;
     emit(&agent, &g);
-    Ok(Json(group_json(&s, &g, &my_identity(&s).await)))
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> R {
@@ -1258,7 +1302,7 @@ async fn set_admin(State(agent): A, Path(id): Path<String>, Json(b): Json<AdminI
     system(&s, &mut g, if b.on { format!("You made {} an admin.", b.name) } else { format!("{} is no longer an admin.", b.name) })?;
     save(&s, &g)?;
     emit(&agent, &g);
-    Ok(Json(group_json(&s, &g, &my_identity(&s).await)))
+    Ok(Json(group_json(&s, &g, &my_name_in(&s, &g).await)))
 }
 
 /// The group's safety number, built from every member's signing key. Members compare it out of
@@ -1272,4 +1316,21 @@ async fn safety(State(agent): A, Path(id): Path<String>) -> R {
     let n = keys.len();
     let number = sotto_core::safety::group_safety_number(&keys.into_iter().map(|(_, k)| k).collect::<Vec<_>>());
     Ok(Json(json!({ "number": number, "members": n })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mentions;
+
+    #[test]
+    fn mentions_match_whole_names_in_any_case() {
+        assert!(mentions("@Ben can you check?", "Ben"));
+        assert!(mentions("thanks @ben.", "Ben"));
+        assert!(mentions("cc @Ada Lovelace, please", "Ada Lovelace"));
+        assert!(!mentions("@Benjamin is on it", "Ben"));
+        assert!(!mentions("@Ben_ops", "Ben"));
+        assert!(!mentions("mail ben@ben.dev", "Ben"));
+        assert!(!mentions("Ben, no at sign", "Ben"));
+        assert!(!mentions("@", ""));
+    }
 }

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellOff, Check, ChevronLeft, Eye, FileText, Info, MessageSquare, Paperclip, Pencil, Search, SendHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { type ApiError, api, del, get, patch, post } from "../api";
+import { type ApiError, del, get, patch, post } from "../api";
 import type { ChannelPost, ChannelReply, ChannelView, Contact } from "../types";
 import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -11,6 +11,7 @@ import { Avatar, seedOf } from "../ui/Avatar";
 import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, bytes } from "../ui/bits";
 import { useToast } from "../ui/toast";
+import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
 import { contactName } from "./ConversationDialogs";
 import { useNav } from "./Shell";
 import { useMyAvatar } from "./AvatarPicker";
@@ -87,7 +88,11 @@ export function ChannelRow({ c, active, onOpen }: { c: ChannelView; active: bool
           {c.muted && <BellOff size={12} className="shrink-0 text-muted-foreground" aria-label="Muted" />}
         </span>
         <span className="mt-0.5 flex items-center gap-2">
-          <span className={`truncate text-[13px] ${c.invited ? "font-medium text-primary" : "text-muted-foreground"}`}>{line}</span>
+          <span className={`truncate text-[13px] ${c.invited ? "font-medium text-primary" : "text-muted-foreground"}`}>
+            <DraftLine draftKey={`h:${c.id}`} off={active || !c.owner}>
+              {line}
+            </DraftLine>
+          </span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <span className="text-[11.5px] text-muted-foreground tabular">{listTime(c.preview_at || c.last_activity)}</span>
             {c.unread > 0 && (
@@ -120,20 +125,17 @@ export function ChannelThread({
   const qc = useQueryClient();
   const toast = useToast();
   const posts = useQuery({ queryKey: ["channel-posts", channel.id], queryFn: () => get<ChannelPost[]>(`/api/channels/${channel.id}/posts`), enabled: !channel.invited });
-  const [text, setText] = useState("");
   const [editing, setEditing] = useState<ChannelPost | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
-  const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState<ChannelPost | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const list = useMemo(() => posts.data ?? [], [posts.data]);
   const owner = contacts.find((c) => c.id === channel.from);
   const ownerName = owner ? contactName(owner) : "the person who made it";
   const { go } = useNav();
   const [dragging, setDragging] = useState(false);
   const [reviewing, setReviewing] = useState<string | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
   const search = useThreadSearch(list, (p) => `${p.body} ${p.file?.name ?? ""} ${p.file?.caption ?? ""}`, (p) => p.id, scroller, "data-pid");
 
   // Opening a channel marks it read; new posts while it's open do too.
@@ -154,39 +156,16 @@ export function ChannelThread({
     void qc.invalidateQueries({ queryKey: ["channels"] });
   };
 
-  async function send() {
-    const body = text.trim();
-    if (!body || sending) return;
-    setSending(true);
-    try {
-      if (editing) await patch(`/api/channels/${channel.id}/posts/${editing.id}`, { text: body });
-      else await post(`/api/channels/${channel.id}/posts`, { text: body });
-      setText("");
-      setEditing(null);
-      refresh();
-    } catch (e) {
-      toast("error", (e as ApiError).message);
-    } finally {
-      setSending(false);
-      input.current?.focus();
-    }
+  async function sendText(body: string) {
+    if (editing) await patch(`/api/channels/${channel.id}/posts/${editing.id}`, { text: body });
+    else await post(`/api/channels/${channel.id}/posts`, { text: body });
+    setEditing(null);
+    refresh();
   }
 
-  async function sendFile(file: File) {
-    setSending(true);
-    try {
-      await api("POST", `/api/channels/${channel.id}/files`, new Uint8Array(await file.arrayBuffer()), {
-        "content-type": file.type || "application/octet-stream",
-        "x-file-name": encodeURIComponent(file.name),
-        "x-caption": encodeURIComponent(text.trim()),
-      });
-      setText("");
-      refresh();
-    } catch (e) {
-      toast("error", (e as ApiError).message);
-    } finally {
-      setSending(false);
-    }
+  async function sendFile(file: File, caption: string) {
+    await uploadFile(`/api/channels/${channel.id}/files`, file, caption);
+    refresh();
   }
 
   async function review(p: ChannelPost) {
@@ -203,8 +182,10 @@ export function ChannelThread({
 
   const startEdit = (p: ChannelPost) => {
     setEditing(p);
-    setText(p.body);
-    input.current?.focus();
+    requestAnimationFrame(() => {
+      composer.current?.setText(p.body);
+      composer.current?.focus();
+    });
   };
 
   const days = useMemo(() => {
@@ -240,8 +221,10 @@ export function ChannelThread({
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          const f = e.dataTransfer.files[0];
-          if (f && channel.owner) void sendFile(f);
+          if (channel.owner && e.dataTransfer.files.length) {
+            setEditing(null);
+            composer.current?.addFiles(Array.from(e.dataTransfer.files));
+          }
         }}
       >
         <header className="flex h-16 shrink-0 items-center gap-3 px-4">
@@ -307,82 +290,36 @@ export function ChannelThread({
             </div>
             <div className="relative shrink-0 px-4 pt-1 pb-4 sm:px-8">
               {channel.owner ? (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void send();
-                  }}
-                  className="mx-auto max-w-[640px] rounded-2xl bg-[var(--composer)] shadow-[var(--composer-shadow)]"
-                >
-                  {editing && (
-                    <div className="flex items-center gap-3 border-b border-line px-4 py-2">
-                      <span className="h-8 w-0.5 rounded-full bg-primary" aria-hidden="true" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[12px] font-semibold text-primary">Editing your post</div>
-                        <div className="truncate text-[12.5px] text-muted-foreground">{editing.body}</div>
-                      </div>
-                      <IconButton
-                        label="Cancel edit"
-                        onClick={() => {
-                          setEditing(null);
-                          setText("");
-                        }}
-                      >
-                        <X size={16} />
-                      </IconButton>
-                    </div>
-                  )}
-                  <div className="flex items-end gap-1.5 p-2">
-                    {!editing && (
-                      <>
-                        <IconButton label="Attach a file" onClick={() => fileInput.current?.click()} disabled={sending}>
-                          <Paperclip size={17} />
-                        </IconButton>
-                        <input
-                          ref={fileInput}
-                          type="file"
-                          hidden
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            e.target.value = "";
-                            if (f) void sendFile(f);
-                          }}
-                        />
-                      </>
-                    )}
-                    <textarea
-                      ref={input}
-                      value={text}
-                      rows={1}
-                      onChange={(e) => setText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          void send();
-                        }
-                        if (e.key === "Escape" && editing) {
-                          setEditing(null);
-                          setText("");
-                        }
-                        if (e.key === "ArrowUp" && !text && list.length) {
-                          e.preventDefault();
-                          startEdit(list[list.length - 1]);
-                        }
-                      }}
-                      placeholder={`Post to ${channel.title}`}
-                      aria-label="Post"
-                      className="max-h-48 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 text-[length:var(--msg-size)] leading-relaxed outline-none placeholder:truncate placeholder:text-muted-foreground"
-                    />
-                    <button
-                      type="submit"
-                      disabled={sending || !text.trim()}
-                      aria-label={editing ? "Save edit" : "Post"}
-                      className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {editing ? <Check size={16} /> : <SendHorizontal size={16} />}
-                    </button>
-                  </div>
-                </form>
+                <div className="mx-auto max-w-[640px]">
+                  <Composer
+                    handle={composer}
+                    draftKey={`h:${channel.id}`}
+                    placeholder={`Post to ${channel.title}`}
+                    editing={!!editing}
+                    banner={
+                      editing && (
+                        <div className="flex items-center gap-3 border-b border-line px-4 py-2">
+                          <Pencil size={15} className="text-primary" />
+                          <div className="min-w-0 flex-1 border-l-2 border-primary pl-2.5">
+                            <div className="text-[12px] font-semibold text-primary">Editing your post</div>
+                            <div className="truncate text-[12.5px] text-muted-foreground">{plain(editing.body)}</div>
+                          </div>
+                          <IconButton label="Cancel edit" type="button" onClick={() => setEditing(null)}>
+                            <X size={15} />
+                          </IconButton>
+                        </div>
+                      )
+                    }
+                    onSendText={sendText}
+                    onSendFile={sendFile}
+                    onEscape={() => setEditing(null)}
+                    onArrowUpEmpty={() => {
+                      const last = list[list.length - 1];
+                      if (last) startEdit(last);
+                    }}
+                    schedule={{ kind: "h", target: channel.id }}
+                  />
+                </div>
               ) : channel.closed ? (
                 <div className="mx-auto max-w-[640px]">
                   <Notice>

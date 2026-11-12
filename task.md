@@ -15,7 +15,22 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 - [x] Signed automatic updates: agent checks and stages (`updates.rs`), shell re-verifies and installs, update notice and About panel; test `updates_install_only_signed_matching_packages`
 - [x] Release workflow builds AppImage and .deb into an unsigned draft; `sotto-release publish` checks, signs and publishes
 - [ ] Windows installer (the agent and review sandbox are Linux-only today) and macOS (needs an Apple developer account)
-- [ ] Next from the plan: composer, media, Files (`docs/plan-updates-composer-media.md`)
+- [ ] Publish v0.2.0: CI draft built; the owner runs `sotto-release publish v0.2.0`
+- [ ] Next from the plan: media, then Files (`docs/plan-updates-composer-media.md`)
+
+## Composer (plan section 2)
+- [x] One shared composer (`ui/Composer.tsx`) in conversations, groups and channels
+- [x] Formatting toolbar on selection; Ctrl+B, Ctrl+I, Ctrl+E, Ctrl+Shift+C; bold and italic can hold other formatting
+- [x] Several files at once (attach, paste, drop) in a tray with thumbnails; one caption for the set; a part-sent set keeps only what didn't go
+- [x] @mentions in groups: member list as you type, highlighted in messages, an "@" badge that counts even when muted (`gmention/`); "you" in a group is found by signature key, so renaming yourself doesn't lose it
+- [x] Emoji picker and `:shortcode:` completion
+- [x] Slash commands: /code, /later, /emoji, plus /secret and /call where they apply
+- [x] Send later (`scheduled.rs`): presets or a picked time, held encrypted on this device, sent while Sotto is open; scheduled chip with cancel; test `send_later_and_group_mentions`
+- [x] Drafts everywhere, memory only, with "Draft: ..." in list previews
+- [ ] Send as photo (cleaned) or as file: with media (plan section 3)
+- [ ] Voice notes: with media
+- [ ] Per-message disappearing time
+- [ ] Silent send: needs desktop notifications first (Sotto doesn't show any yet)
 
 ## Phase 0: foundations
 - [x] Threat model, protocol spec, Rust workspace, pinned toolchain, release profile

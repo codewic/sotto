@@ -12,6 +12,7 @@ pub mod drops;
 pub mod groups;
 pub mod hooks;
 pub mod review;
+pub mod scheduled;
 pub mod secrets;
 pub mod shared;
 pub mod state;

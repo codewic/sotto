@@ -858,3 +858,75 @@ async fn updates_install_only_signed_matching_packages() {
     assert_eq!(std::fs::read(staged["path"].as_str().unwrap()).unwrap(), b"new build");
     assert!(sotto_core::release::verify_manifest(staged["manifest"].as_str().unwrap().as_bytes(), staged["sig"].as_str().unwrap(), &signing_public(&seed)));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_later_and_group_mentions() {
+    // SAFETY: only the send-later loop reads this, and it only shortens its timings.
+    unsafe { std::env::set_var("SOTTO_SCHEDULE_QUICK", "1") };
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let url = relay().await;
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ra = named_desk(da.path(), &url, "owner-passcode", "Ada").await;
+    let rb = named_desk(db.path(), &url, "member-passcode", "Ben").await;
+    let ben = connect(&ra, &rb, "Ben").await;
+
+    // Nonsense is refused, with a reason.
+    let (s, _) = call(&ra, "POST", "/api/scheduled", Some(json!({ "kind": "x", "target": ben, "text": "hi", "at": now() + 60 }))).await;
+    assert_ne!(s, StatusCode::OK);
+    let (s, _) = call(&ra, "POST", "/api/scheduled", Some(json!({ "kind": "c", "target": ben, "text": "  ", "at": now() + 60 }))).await;
+    assert_ne!(s, StatusCode::OK);
+    let (s, _) = call(&ra, "POST", "/api/scheduled", Some(json!({ "kind": "c", "target": ben, "text": "hi", "at": now() + 40 * 86_400 }))).await;
+    assert_ne!(s, StatusCode::OK);
+
+    // One for later that's cancelled, one that goes in two seconds.
+    let (s, keep) = call(&ra, "POST", "/api/scheduled", Some(json!({ "kind": "c", "target": ben, "text": "Not this one", "at": now() + 3600 }))).await;
+    assert_eq!(s, StatusCode::OK, "{keep}");
+    let (s, v) = call(&ra, "POST", "/api/scheduled", Some(json!({ "kind": "c", "target": ben, "text": "Standup moved to 10:30", "at": now() + 2 }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, list) = call(&ra, "GET", &format!("/api/scheduled?kind=c&target={ben}"), None).await;
+    assert_eq!(list.as_array().unwrap().len(), 2, "{list}");
+    assert_eq!(list[0]["text"], "Standup moved to 10:30", "soonest first: {list}");
+    let (s, _) = call(&ra, "DELETE", &format!("/api/scheduled/{}", keep["id"].as_str().unwrap()), None).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let ada_for_ben = call(&rb, "GET", "/api/contacts", None).await.1[0]["id"].as_str().unwrap().to_string();
+    until("Ben gets the scheduled message", || async {
+        call(&rb, "GET", &format!("/api/contacts/{ada_for_ben}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["text"] == "Standup moved to 10:30")
+    })
+    .await;
+    until("nothing left scheduled", || async { call(&ra, "GET", "/api/scheduled", None).await.1.as_array().unwrap().is_empty() }).await;
+    let got = call(&rb, "GET", &format!("/api/contacts/{ada_for_ben}/messages"), None).await.1;
+    assert!(!got.to_string().contains("Not this one"), "cancelled message was sent: {got}");
+
+    // Mentions: Ben mutes the group, and a mention of him still counts; a near miss doesn't.
+    let (_, g) = call(&ra, "POST", "/api/groups", Some(json!({ "title": "Release crew", "members": [ben] }))).await;
+    let gid = g["id"].as_str().unwrap().to_string();
+    until("Ben in", || async { group_view(&rb, &gid).await["member_count"] == 2 }).await;
+    call(&rb, "PATCH", &format!("/api/groups/{gid}"), Some(json!({ "muted": true }))).await;
+    assert_eq!(group_view(&rb, &gid).await["mentions"], 0);
+    call(&ra, "POST", &format!("/api/groups/{gid}/messages"), Some(json!({ "text": "@Benjamin isn't here" }))).await;
+    call(&ra, "POST", &format!("/api/groups/{gid}/messages"), Some(json!({ "text": "@ben can you tag the build?" }))).await;
+    until("Ben has both", || async { group_view(&rb, &gid).await["unread"] == 2 }).await;
+    let v = group_view(&rb, &gid).await;
+    assert!(v["mentions"] == 1 && v["muted"] == true, "{v}");
+    // Your own mention of yourself doesn't count, and reading clears it.
+    call(&rb, "POST", &format!("/api/groups/{gid}/messages"), Some(json!({ "text": "@Ben note to self" }))).await;
+    assert_eq!(group_view(&rb, &gid).await["mentions"], 1);
+    call(&rb, "POST", &format!("/api/groups/{gid}/read"), None).await;
+    assert_eq!(group_view(&rb, &gid).await["mentions"], 0);
+
+    // Renaming yourself later doesn't lose track of which member is you, or of mentions by the old name.
+    call(&rb, "PATCH", "/api/settings", Some(json!({ "display_name": "Ben Okoro" }))).await;
+    let v = group_view(&rb, &gid).await;
+    let you: Vec<&Value> = v["members"].as_array().unwrap().iter().filter(|m| m["you"] == true).collect();
+    assert!(you.len() == 1 && you[0]["name"] == "Ben", "{v}");
+    call(&ra, "POST", &format!("/api/groups/{gid}/messages"), Some(json!({ "text": "thanks @Ben" }))).await;
+    until("mention by the joined name", || async { group_view(&rb, &gid).await["mentions"] == 1 }).await;
+
+    // Scheduled group messages go through the group.
+    call(&rb, "POST", "/api/scheduled", Some(json!({ "kind": "g", "target": gid, "text": "Tagged v1.4.0", "at": now() + 2 }))).await;
+    until("Ada gets Ben's scheduled group message", || async {
+        call(&ra, "GET", &format!("/api/groups/{gid}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["text"] == "Tagged v1.4.0" && m["author"] == "Ben Okoro")
+    })
+    .await;
+}

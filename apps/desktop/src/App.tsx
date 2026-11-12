@@ -58,6 +58,9 @@ export function App() {
           case "call":
             qc.invalidateQueries({ queryKey: ["calls"] });
             break;
+          case "scheduled":
+            qc.invalidateQueries({ queryKey: ["scheduled"] });
+            break;
           case "relay":
             qc.invalidateQueries({ queryKey: ["status"] });
             break;
