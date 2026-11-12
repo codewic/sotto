@@ -88,7 +88,7 @@ pub fn yellow_specks(r: &Raster) -> (u32, f32) {
 
 /// Turn print-yellow pixels white (removes tracking dots while keeping colour elsewhere).
 pub fn remove_yellow(r: &mut Raster) {
-    for p in r.rgb.chunks_exact_mut(3) {
+    for p in r.rgb.as_chunks_mut::<3>().0 {
         if is_print_yellow(p[0], p[1], p[2]) {
             p.copy_from_slice(&[255, 255, 255]);
         }
@@ -96,7 +96,7 @@ pub fn remove_yellow(r: &mut Raster) {
 }
 
 pub fn to_grey(r: &mut Raster) {
-    for p in r.rgb.chunks_exact_mut(3) {
+    for p in r.rgb.as_chunks_mut::<3>().0 {
         let l = ((p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000) as u8;
         p.copy_from_slice(&[l, l, l]);
     }

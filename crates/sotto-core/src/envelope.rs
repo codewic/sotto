@@ -141,7 +141,7 @@ pub enum ChannelSignal {
     /// Subscriber to owner only: a private reply to one post.
     Reply { channel_id: Id, post_id: Id, reply_id: Id, body: String, sent_at: u64 },
     /// Owner to subscriber: a post carrying a file (`caption` is its text).
-    File { channel_id: Id, post_id: Id, file: FileRef, caption: String, sent_at: u64 },
+    File { channel_id: Id, post_id: Id, file: Box<FileRef>, caption: String, sent_at: u64 },
     /// Subscriber to owner, only if the subscriber turned read receipts on for this channel.
     Seen { channel_id: Id, post_ids: Vec<Id> },
 }

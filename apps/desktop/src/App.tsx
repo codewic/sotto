@@ -49,6 +49,9 @@ export function App() {
           case "me":
             qc.invalidateQueries({ queryKey: ["me-avatar"] });
             break;
+          case "update":
+            qc.invalidateQueries({ queryKey: ["updates"] });
+            break;
           case "secret":
             if (e.contact_id) qc.invalidateQueries({ queryKey: ["secrets", e.contact_id] });
             break;

@@ -335,7 +335,7 @@ pub async fn on_signal(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, signal
                     let at = file_at(&channel_id, &p.id);
                     let signal = if crate::shared::get(&s2, &at).is_some() {
                         match crate::shared::copy_for_one(&s2, &at).await {
-                            Ok(file) => ChannelSignal::File { channel_id, post_id: p.id, file, caption: p.body, sent_at: p.sent_at },
+                            Ok(file) => ChannelSignal::File { channel_id, post_id: p.id, file: Box::new(file), caption: p.body, sent_at: p.sent_at },
                             Err(_) => continue,
                         }
                     } else {
@@ -444,7 +444,7 @@ fn from_owner(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, signal: Channel
                 return Ok(());
             }
             let name = file.name.clone();
-            crate::shared::receive(agent, s, &file_at(&channel_id, &post_id), file, json!({ "type": "channel", "id": hex(&channel_id) }))?;
+            crate::shared::receive(agent, s, &file_at(&channel_id, &post_id), *file, json!({ "type": "channel", "id": hex(&channel_id) }))?;
             put_post(s, &channel_id, &Post { id: post_id, body: clean(&caption, 2000), sent_at, received_at: time::now_ms(), edited: false, replies: 0 })?;
             c.unread += 1;
             touch(&mut c, name);
@@ -497,7 +497,7 @@ fn cid(s: &str) -> Result<Id, ApiError> {
 async fn list(State(agent): A) -> R {
     let s = agent.session().await?;
     let mut v = records(&s);
-    v.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    v.sort_by_key(|x| std::cmp::Reverse(x.last_activity));
     Ok(Json(json!(v.iter().map(|c| channel_json(&s, c)).collect::<Vec<_>>())))
 }
 
@@ -856,8 +856,8 @@ async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, 
     touch(&mut c, format!("You: {}", f.name));
     save(&s, &c)?;
     let channel_id = c.id;
-    for (chunk, file) in to.chunks(PER_COPY).zip(refs.into_iter()) {
-        fan_out(&s, chunk.to_vec(), ChannelSignal::File { channel_id, post_id: pid, file: file.clone(), caption: caption.clone(), sent_at: now_ms });
+    for (chunk, file) in to.chunks(PER_COPY).zip(refs) {
+        fan_out(&s, chunk.to_vec(), ChannelSignal::File { channel_id, post_id: pid, file: Box::new(file.clone()), caption: caption.clone(), sent_at: now_ms });
     }
     emit(&agent, &c.id);
     Ok(Json(post_json(&s, &c, &p)))

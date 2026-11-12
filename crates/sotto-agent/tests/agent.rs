@@ -47,7 +47,8 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    for _ in 0..200 {
+    // Generous: CI machines run every test at once and can be slow.
+    for _ in 0..800 {
         if f().await {
             return;
         }
@@ -699,7 +700,7 @@ async fn tags_let_people_connect_without_a_link() {
     .await;
     // They can talk straight away.
     call(&rb, "POST", &format!("/api/contacts/{ada_for_ben}/messages"), Some(json!({ "text": "Hi Ada, Ben from platform." }))).await;
-    let ben = call(&ra, "GET", "/api/contacts", None).await.1[0]["id"].as_str().unwrap().to_string();
+    let ben = call(&ra, "GET", "/api/contacts", None).await.1.as_array().unwrap().iter().find(|c| c["their_name"] == "Ben").unwrap()["id"].as_str().unwrap().to_string();
     until("message arrives", || async {
         call(&ra, "GET", &format!("/api/contacts/{ben}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["text"] == "Hi Ada, Ben from platform.")
     })
@@ -782,4 +783,78 @@ async fn tags_work_across_relays() {
     // A tag on a relay that isn't a relay address at all is refused before anything is sent.
     let (s, _) = call(&rb, "POST", "/api/tag/connect", Some(json!({ "tag": "ada@" }))).await;
     assert_ne!(s, StatusCode::OK);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn updates_install_only_signed_matching_packages() {
+    use sotto_core::keys::{sign, signing_public};
+    use sotto_core::release::signed_message;
+    use std::sync::{Arc as A, Mutex as M};
+
+    // A stand-in release server: manifest, signature and one package, all changeable.
+    #[derive(Default)]
+    struct Rel {
+        manifest: Vec<u8>,
+        sig: String,
+        package: Vec<u8>,
+    }
+    let rel: A<M<Rel>> = A::new(M::new(Rel::default()));
+    let seed = [42u8; 32];
+    let publish = |rel: &A<M<Rel>>, version: &str, package: &[u8], served: &[u8], key: [u8; 32]| {
+        let sha = sotto_core::hex(&sotto_core::kdf::sha256(package));
+        let manifest = serde_json::to_vec(&json!({
+            "app": "sotto", "version": version, "notes": "Faster group sync.",
+            "files": [{ "name": "Sotto.AppImage", "kind": "appimage", "os": "linux", "arch": "x86_64", "size": package.len(), "sha256": sha }],
+        }))
+        .unwrap();
+        let sig = sotto_core::hex(&sign(&key, &signed_message(&manifest)).0);
+        *rel.lock().unwrap() = Rel { manifest, sig, package: served.to_vec() };
+    };
+    let r2 = rel.clone();
+    let app = Router::new()
+        .route("/latest/download/latest.json", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().manifest.clone() } } }))
+        .route("/latest/download/latest.json.sig", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().sig.clone() } } }))
+        .route("/download/{v}/{name}", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().package.clone() } } }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // SAFETY: only this test reads these variables.
+    unsafe {
+        std::env::set_var("SOTTO_UPDATE_BASE", format!("http://{addr}"));
+        std::env::set_var("SOTTO_UPDATE_TEST_KEY", sotto_core::hex(&signing_public(&seed)));
+        std::env::set_var("SOTTO_PACKAGE", "appimage");
+    }
+
+    let url = relay().await;
+    let d = tempfile::tempdir().unwrap();
+    let r = named_desk(d.path(), &url, "update-passcode", "Ada").await;
+    let check = || async { call(&r, "POST", "/api/updates/check", None).await.1 };
+
+    // Signed by someone else: ignored entirely.
+    publish(&rel, "9.0.0", b"new build", b"new build", [7u8; 32]);
+    let v = check().await;
+    assert_eq!(v["state"], "error", "{v}");
+    assert!(v["error"].as_str().unwrap().contains("signature"), "{v}");
+    assert!(v["version"].is_null(), "nothing from an unsigned manifest is believed: {v}");
+
+    // Signed, but the package served isn't the one the manifest names.
+    publish(&rel, "9.0.0", b"new build", b"tampered build", seed);
+    let v = check().await;
+    assert_eq!(v["state"], "error", "{v}");
+    assert!(v["error"].as_str().unwrap().contains("fingerprint"), "{v}");
+    assert_eq!(call(&r, "GET", "/api/updates/staged", None).await.0, StatusCode::NOT_FOUND);
+
+    // Not newer: nothing to do.
+    publish(&rel, "0.0.1", b"old build", b"old build", seed);
+    assert_eq!(check().await["state"], "current");
+
+    // Signed and matching: downloaded, verified, staged for the shell to install.
+    publish(&rel, "9.0.0", b"new build", b"new build", seed);
+    let v = check().await;
+    assert_eq!(v["state"], "ready", "{v}");
+    assert_eq!(v["version"], "9.0.0");
+    let (s, staged) = call(&r, "GET", "/api/updates/staged", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(std::fs::read(staged["path"].as_str().unwrap()).unwrap(), b"new build");
+    assert!(sotto_core::release::verify_manifest(staged["manifest"].as_str().unwrap().as_bytes(), staged["sig"].as_str().unwrap(), &signing_public(&seed)));
 }

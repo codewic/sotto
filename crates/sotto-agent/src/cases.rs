@@ -226,6 +226,7 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
     crate::groups::start(agent, s).await;
     crate::secrets::start(s);
     crate::tags::start(agent, s);
+    crate::updates::start(agent);
     let (a, sess) = (agent.clone(), s.clone());
     tokio::spawn(async move {
         while let Some(p) = rx.recv().await {
@@ -245,11 +246,10 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
         // Retention: destroy cases whose time has come (unless on legal hold).
         loop {
             for c in records(&sess) {
-                if let Some(t) = c.destroy_at {
-                    if !c.legal_hold && t <= time::now() {
+                if let Some(t) = c.destroy_at
+                    && !c.legal_hold && t <= time::now() {
                         let _ = destroy_local(&a, &sess, &c.id).await;
                     }
-                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
@@ -410,13 +410,12 @@ async fn handle_extension(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, pay
         }
         Payload::InsuranceUpdate { read_id, deadline } => {
             let k = format!("grant/{}", hex(&read_id));
-            if let Some(mut g) = s.cases.get::<Grant>(&k)? {
-                if g.from == contact {
+            if let Some(mut g) = s.cases.get::<Grant>(&k)?
+                && g.from == contact {
                     g.deadline = deadline;
                     s.cases.put(&k, &g)?;
                     agent.emit(json!({ "type": "case" }));
                 }
-            }
         }
         _ => {}
     }
@@ -582,7 +581,7 @@ pub fn routes() -> Router<Arc<Agent>> {
 async fn list(State(agent): A) -> R {
     let s = agent.session().await?;
     let mut v: Vec<CaseRecord> = records(&s);
-    v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    v.sort_by_key(|x| std::cmp::Reverse(x.created_at));
     Ok(Json(json!(v.iter().map(case_json).collect::<Vec<_>>())))
 }
 

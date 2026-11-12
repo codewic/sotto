@@ -88,7 +88,7 @@ pub fn broker_url(raw: &str) -> Result<String, ApiError> {
     Ok(with_scheme)
 }
 
-fn http(transport: &Transport) -> Result<reqwest::Client, ApiError> {
+pub(crate) fn http(transport: &Transport) -> Result<reqwest::Client, ApiError> {
     let mut b = reqwest::Client::builder().timeout(Duration::from_secs(40)).user_agent("sotto");
     if let Transport::Tor { socks } = transport {
         // socks5h: the call server's name is resolved inside Tor, not by the local network.

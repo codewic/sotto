@@ -24,7 +24,7 @@ impl<W: Write + Seek> PdfWriter<W> {
     fn begin(&mut self) -> std::io::Result<usize> {
         self.offsets.push(self.out.stream_position()?);
         let n = self.offsets.len();
-        write!(self.out, "{n} 0 obj\n")?;
+        writeln!(self.out, "{n} 0 obj")?;
         Ok(n)
     }
 
@@ -64,7 +64,7 @@ impl<W: Write + Seek> PdfWriter<W> {
         let xref = self.out.stream_position()?;
         write!(self.out, "xref\n0 {}\n0000000000 65535 f \n", self.offsets.len() + 1)?;
         for o in &self.offsets {
-            write!(self.out, "{o:010} 00000 n \n")?;
+            writeln!(self.out, "{o:010} 00000 n ")?;
         }
         write!(self.out, "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", self.offsets.len() + 1)?;
         self.out.flush()?;

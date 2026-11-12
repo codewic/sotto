@@ -1,0 +1,12 @@
+[package]
+name = "sotto-release"
+description = "Make the release key, write release manifests in CI, and sign and publish releases on the owner's machine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde_json = "1"
+sotto-core = { path = "../sotto-core" }

@@ -142,11 +142,10 @@ impl Agent {
         if passcode.chars().count() < 8 {
             return Err(ApiError::Invalid("Use at least 8 characters for your passcode.".into()));
         }
-        if let Some(d) = duress {
-            if d.chars().count() < 8 {
+        if let Some(d) = duress
+            && d.chars().count() < 8 {
                 return Err(ApiError::Invalid("Use at least 8 characters for the duress passcode.".into()));
             }
-        }
         if let Some(r) = &relay {
             sotto_client::conn::validate_relay_url(r)?;
         }

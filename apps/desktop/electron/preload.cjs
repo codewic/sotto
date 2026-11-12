@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld("sotto", {
   openCall: (id) => ipcRenderer.invoke("sotto:open-call", id),
   // Lets native parts (dialogs, the window behind the page) follow Sotto's theme.
   setAppearance: (a) => ipcRenderer.invoke("sotto:appearance", a),
+  // Install a staged update (the shell verifies its signature again first), then restart.
+  installUpdate: () => ipcRenderer.invoke("sotto:install-update"),
 });

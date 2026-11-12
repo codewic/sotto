@@ -14,6 +14,7 @@ import { forgetAppearance } from "../theme/appearance";
 import { Appearance } from "./Appearance";
 import { EraseDialog } from "./Unlock";
 import { MyAvatar } from "./AvatarPicker";
+import { UpdatePanel } from "./Updates";
 import { TagPanel, type TagView } from "./ConversationDialogs";
 import { PaneHeader, useNav } from "./Shell";
 
@@ -213,6 +214,7 @@ export function Settings({ initial }: { initial?: string }) {
               <Mark size={40} />
               <div className="text-[13.5px] text-muted-foreground">
                 <div className="font-medium text-foreground">Sotto {status.version}</div>
+                <UpdatePanel extreme={s.risk_mode === "extreme"} />
                 <p className="mt-1">A private, end-to-end encrypted workspace for teams. Open source, no analytics, no telemetry. Built by Vorynza.</p>
                 <p className="mt-2">
                   What Sotto can't protect against: spyware on your devices, details in the information that only a few people know, and someone watching both ends of the Tor network at once.

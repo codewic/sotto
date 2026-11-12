@@ -145,7 +145,7 @@ pub fn sources(store: &Store, drop: &str) -> Result<Vec<DropSource>, ApiError> {
             v.push(s);
         }
     }
-    v.sort_by(|a, b| b.last_day.cmp(&a.last_day));
+    v.sort_by_key(|x| std::cmp::Reverse(x.last_day));
     Ok(v)
 }
 

@@ -90,11 +90,10 @@ impl Engine {
         }
         let mut expiry = BTreeMap::new();
         for name in store.names("msg/") {
-            if let Some(m) = store.get::<Message>(&name)? {
-                if let Some(e) = m.expires_at {
+            if let Some(m) = store.get::<Message>(&name)?
+                && let Some(e) = m.expires_at {
                     expiry.insert((e, name), blob_of(&m));
                 }
-            }
         }
         let (push_tx, push_rx) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(512);
@@ -335,7 +334,7 @@ impl Engine {
 
     pub async fn contacts(&self) -> Vec<ContactView> {
         let mut v: Vec<ContactView> = self.inner.contacts.lock().await.values().map(|c| c.view()).collect();
-        v.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        v.sort_by_key(|c| std::cmp::Reverse(c.last_activity));
         v
     }
 
@@ -367,13 +366,12 @@ impl Engine {
         let receipts = self.inner.contacts.lock().await.get(id).map(|c| c.read_receipts).ok_or(Error::NotFound)?;
         let mut ids = Vec::new();
         for name in self.inner.store.names(&format!("msg/{}/", hex(id))) {
-            if let Some(mut m) = self.inner.store.get::<Message>(&name)? {
-                if !m.outgoing && !m.read && !matches!(m.body, Body::System(_)) {
+            if let Some(mut m) = self.inner.store.get::<Message>(&name)?
+                && !m.outgoing && !m.read && !matches!(m.body, Body::System(_)) {
                     m.read = true;
                     self.save_message(&m)?;
                     ids.push(m.id);
                 }
-            }
         }
         if receipts && !ids.is_empty() {
             let _ = self.send_payload(id, &Payload::Read { ids }).await;
@@ -861,35 +859,32 @@ impl Engine {
                 }
             }
             Payload::Edit { target, body } => {
-                if let Some(mut m) = self.find_message(cid, &target) {
-                    if !m.outgoing && matches!(m.body, Body::Text(_)) {
+                if let Some(mut m) = self.find_message(cid, &target)
+                    && !m.outgoing && matches!(m.body, Body::Text(_)) {
                         m.body = Body::Text(body.chars().take(12_000).collect());
                         m.edited = true;
                         self.save_message(&m)?;
                         self.emit(Event::Message { contact_id: hex(cid), id: hex(&target) });
                     }
-                }
             }
             Payload::Read { ids } => {
                 for id in ids.into_iter().take(500) {
-                    if let Some(mut m) = self.find_message(cid, &id) {
-                        if m.outgoing && !m.read {
+                    if let Some(mut m) = self.find_message(cid, &id)
+                        && m.outgoing && !m.read {
                             m.read = true;
                             self.save_message(&m)?;
                             self.emit(Event::Message { contact_id: hex(cid), id: hex(&id) });
                         }
-                    }
                 }
             }
             Payload::Receipt { ids } => {
                 for id in ids {
-                    if let Some(mut m) = self.find_message(cid, &id) {
-                        if m.outgoing && m.delivery != Delivery::Delivered {
+                    if let Some(mut m) = self.find_message(cid, &id)
+                        && m.outgoing && m.delivery != Delivery::Delivered {
                             m.delivery = Delivery::Delivered;
                             self.save_message(&m)?;
                             self.emit(Event::Message { contact_id: hex(cid), id: hex(&id) });
                         }
-                    }
                 }
             }
             Payload::Delete { ids } => {

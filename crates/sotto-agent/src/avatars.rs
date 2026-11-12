@@ -87,11 +87,10 @@ pub async fn sync(agent: &Arc<Agent>) {
         return;
     }
     for c in s.engine.contacts().await {
-        if c.state == "ready" {
-            if let Ok(id) = unhex::<16>(&c.id) {
+        if c.state == "ready"
+            && let Ok(id) = unhex::<16>(&c.id) {
                 tell(&s, &id, &m).await;
             }
-        }
     }
 }
 
@@ -120,11 +119,10 @@ async fn set(State(agent): A, Json(b): Json<SetIn>) -> R {
     let s2 = s.clone();
     tokio::spawn(async move {
         for c in s2.engine.contacts().await {
-            if c.state == "ready" {
-                if let Ok(id) = unhex::<16>(&c.id) {
+            if c.state == "ready"
+                && let Ok(id) = unhex::<16>(&c.id) {
                     tell(&s2, &id, &m).await;
                 }
-            }
         }
     });
     agent.emit(json!({ "type": "me" }));

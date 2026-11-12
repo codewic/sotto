@@ -224,11 +224,10 @@ impl Mls {
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => Ok(Processed::Application { sender, sender_key, data: app.into_bytes() }),
             ProcessedMessageContent::StagedCommitMessage(staged) => {
-                if let Some(allowed) = committer {
-                    if sender_key != allowed {
+                if let Some(allowed) = committer
+                    && sender_key != allowed {
                         return Err(CaseError::Mls("commit from someone other than the case owner".into()));
                     }
-                }
                 let before: Vec<Vec<u8>> = group.members().map(|m| identity_of(&m.credential)).collect();
                 group.merge_staged_commit(&self.provider, *staged).map_err(mls)?;
                 let after: Vec<Vec<u8>> = group.members().map(|m| identity_of(&m.credential)).collect();

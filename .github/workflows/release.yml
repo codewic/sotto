@@ -1,0 +1,50 @@
+name: release
+# A tag like v0.2.0 builds Sotto and leaves an UNSIGNED draft release here, in the source
+# repository. Nothing reaches users until the owner runs `sotto-release publish v0.2.0` on their own
+# machine: that checks every file against the manifest, signs it with the release key (which never
+# touches CI) and publishes to codewic/sotto-releases.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # An older Ubuntu, so the AppImage runs on older systems too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the versions in the code
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$V\"" Cargo.toml || { echo "Cargo.toml isn't $V"; exit 1; }
+          grep -q "\"version\": \"$V\"" apps/desktop/package.json || { echo "package.json isn't $V"; exit 1; }
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: oven-sh/setup-bun@v2
+      - name: Build the agent, sandbox renderer, hook and release tools
+        run: cargo build --release --locked -p sotto-agent -p sotto-review -p sotto-hook -p sotto-release
+      - name: Build and package the app
+        working-directory: apps/desktop
+        run: |
+          bun install --frozen-lockfile
+          bun run dist
+      - name: Collect the files and write the unsigned manifest
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          cp apps/desktop/release/*.AppImage apps/desktop/release/*.deb out/
+          tar -czf "out/sotto-tools-$V-x86_64.tar.gz" -C target/release sotto-hook
+          NOTES="docs/releases/$GITHUB_REF_NAME.md"
+          [ -f "$NOTES" ] || git log -1 --format=%B > "$NOTES"
+          ./target/release/sotto-release manifest "$GITHUB_REF_NAME" out --notes "$NOTES" > out/latest.json
+          cat out/latest.json
+      - name: Draft release (unsigned; the owner signs and publishes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --draft --title "$GITHUB_REF_NAME (unsigned draft)" \
+            --notes "Unsigned build from CI. Publish with: sotto-release publish $GITHUB_REF_NAME"

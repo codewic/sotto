@@ -68,6 +68,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .merge(crate::secrets::routes())
         .merge(crate::tags::routes())
         .merge(crate::avatars::routes())
+        .merge(crate::updates::routes())
         .layer(DefaultBodyLimit::max(512 << 20))
         .layer(axum::middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent.clone());
@@ -286,11 +287,10 @@ struct DuressIn {
 
 async fn set_duress(State(agent): A, Json(b): Json<DuressIn>) -> R {
     let s = agent.session().await?;
-    if let Some(d) = &b.duress {
-        if d.chars().count() < 8 {
+    if let Some(d) = &b.duress
+        && d.chars().count() < 8 {
             return Err(ApiError::Invalid("Use at least 8 characters for the duress passcode.".into()));
         }
-    }
     let mut v = s.vault.lock().await;
     v.set_duress(&b.passcode, b.duress.as_deref())?;
     ok()
@@ -457,13 +457,12 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (bytes.get(i + 1).and_then(|c| (*c as char).to_digit(16)), bytes.get(i + 2).and_then(|c| (*c as char).to_digit(16))) {
+        if bytes[i] == b'%' && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (bytes.get(i + 1).and_then(|c| (*c as char).to_digit(16)), bytes.get(i + 2).and_then(|c| (*c as char).to_digit(16))) {
                 out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
-        }
         out.push(bytes[i]);
         i += 1;
     }

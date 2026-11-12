@@ -50,6 +50,9 @@ struct Request {
 
 const KEY: &str = "tag/me";
 
+/// Claiming, releasing and restocking take turns, so a restock can't bring back a released tag.
+static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn record(s: &Session) -> Option<TagRecord> {
     s.cases.get::<TagRecord>(KEY).ok().flatten()
 }
@@ -58,9 +61,21 @@ fn req_key(c: &Id) -> String {
     format!("tagreq/{}", hex(c))
 }
 
+/// Invites being made right now, before they're saved in the tag's record: hidden too, so they
+/// never flash up in the conversation list.
+static MAKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// Contacts that are only stocked invites: hidden from the conversation list.
 pub fn hidden(s: &Session) -> Vec<String> {
-    record(s).map(|r| r.pending.iter().map(|p| hex(p)).collect()).unwrap_or_default()
+    let mut v: Vec<String> = record(s).map(|r| r.pending.iter().map(|p| hex(p)).collect()).unwrap_or_default();
+    v.extend(MAKING.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned());
+    v
+}
+
+/// Stop hiding these as "being made" (they're saved in the record now, or deleted).
+fn made(ids: &[Id]) {
+    let gone: Vec<String> = ids.iter().map(|i| hex(i)).collect();
+    MAKING.lock().unwrap_or_else(|e| e.into_inner()).retain(|x| !gone.contains(x));
 }
 
 /// Whether a contact reached us through our tag and hasn't been accepted yet.
@@ -107,6 +122,7 @@ async fn make_invites(s: &Session, n: u32) -> Result<Vec<(Id, String, u64)>, Api
     let mut out = Vec::new();
     for _ in 0..n {
         let (id, link) = s.engine.create_invite("", &label, false).await?;
+        MAKING.lock().unwrap_or_else(|e| e.into_inner()).push(hex(&id));
         let exp = s.engine.contact(&id).await.and_then(|c| c.invite_expires).unwrap_or_else(|| time::now() + 7 * 86_400);
         out.push((id, link, exp));
     }
@@ -133,6 +149,7 @@ async fn tag_add(s: &Session, r: &TagRecord, invites: Vec<(Vec<u8>, u64)>) -> Re
 
 /// Bring the stock back up, and turn used invites into requests.
 async fn restock(agent: &Agent, s: &Session) -> Result<(), ApiError> {
+    let _turn = TURN.lock().await;
     let Some(mut r) = record(s) else { return Ok(()) };
     let now = time::now();
     let mut keep = Vec::new();
@@ -159,6 +176,7 @@ async fn restock(agent: &Agent, s: &Session) -> Result<(), ApiError> {
         let fresh = make_invites(s, need).await?;
         r.pending.extend(fresh.iter().map(|(id, _, _)| *id));
         s.cases.put(KEY, &r)?;
+        made(&r.pending);
         tag_add(s, &r, fresh.into_iter().map(|(_, link, exp)| (link.into_bytes(), exp)).collect()).await?;
     }
     Ok(())
@@ -215,6 +233,7 @@ async fn claim(State(agent): A, Json(b): Json<TagIn>) -> R {
         return Err(ApiError::Invalid("Tags are off in Extreme mode: anyone who knows a tag can ask to reach you. Use one-time invite links.".into()));
     }
     let tag = normalize(&b.tag).ok_or_else(|| ApiError::Invalid("A tag is 3 to 24 characters: lowercase letters, numbers, dots and underscores, starting with a letter.".into()))?;
+    let _turn = TURN.lock().await;
     let old = record(&s);
     if old.as_ref().is_some_and(|o| o.tag == tag) {
         return Ok(Json(view(&s)));
@@ -223,22 +242,30 @@ async fn claim(State(agent): A, Json(b): Json<TagIn>) -> R {
     let mut r = TagRecord { tag, relay, seed: sotto_core::rand::bytes(), pending: vec![], created_at: time::now() };
     let fresh = make_invites(&s, STOCK).await?;
     r.pending = fresh.iter().map(|(id, _, _)| *id).collect();
-    match tag_add(&s, &r, fresh.into_iter().map(|(_, link, exp)| (link.into_bytes(), exp)).collect()).await {
+    let result = tag_add(&s, &r, fresh.into_iter().map(|(_, link, exp)| (link.into_bytes(), exp)).collect()).await;
+    if result.is_err() {
+        for id in &r.pending {
+            let _ = s.engine.delete_contact(id).await;
+        }
+    }
+    let saved = match &result {
         Ok(_) => {
             // Only give up the old tag once the new one is ours.
             if let Some(o) = old {
                 release_inner(&s, &o).await;
             }
-            s.cases.put(KEY, &r)?;
+            s.cases.put(KEY, &r).map_err(ApiError::from)
+        }
+        Err(_) => Ok(()),
+    };
+    made(&r.pending);
+    saved?;
+    match result {
+        Ok(_) => {
             agent.emit(json!({ "type": "contacts" }));
             Ok(Json(view(&s)))
         }
-        Err(e) => {
-            for id in &r.pending {
-                let _ = s.engine.delete_contact(id).await;
-            }
-            Err(e)
-        }
+        Err(e) => Err(e),
     }
 }
 
@@ -255,6 +282,7 @@ async fn release_inner(s: &Session, r: &TagRecord) {
 /// Give the tag up: the relay forgets it, and unused invites are closed.
 async fn release(State(agent): A) -> R {
     let s = agent.session().await?;
+    let _turn = TURN.lock().await;
     if let Some(r) = record(&s) {
         release_inner(&s, &r).await;
     }

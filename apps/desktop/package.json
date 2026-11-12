@@ -1,14 +1,15 @@
 {
   "name": "sotto-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "electron": "electron ."
+    "electron": "electron .",
+    "dist": "vite build && electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -24,8 +25,65 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "5",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
     "tailwindcss": "4.3.3",
     "typescript": "~5.9.3",
     "vite": "7"
+  },
+  "description": "Sotto: a private, end-to-end encrypted workspace for teams",
+  "author": {
+    "name": "Vorynza"
+  },
+  "homepage": "https://github.com/codewic/sotto-releases",
+  "build": {
+    "appId": "cloud.vorynza.sotto",
+    "productName": "Sotto",
+    "executableName": "sotto",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../target/release/sotto-agent",
+        "to": "bin/sotto-agent"
+      },
+      {
+        "from": "../../target/release/sotto-render",
+        "to": "bin/sotto-render"
+      },
+      {
+        "from": "../../target/release/sotto-hook",
+        "to": "bin/sotto-hook"
+      }
+    ],
+    "artifactName": "Sotto-${version}-${arch}.${ext}",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "icon": "build/icon.png",
+      "synopsis": "Private, end-to-end encrypted workspace for teams",
+      "maintainer": "Vorynza"
+    },
+    "deb": {
+      "depends": [
+        "bubblewrap"
+      ],
+      "recommends": [
+        "poppler-utils",
+        "libreoffice-writer-nogui",
+        "tor"
+      ]
+    },
+    "publish": null
   }
 }

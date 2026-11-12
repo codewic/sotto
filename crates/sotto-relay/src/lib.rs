@@ -367,7 +367,7 @@ fn dispatch(shared: &Shared, conn: ConnId, nonce: &[u8; 32], tx: &Tx, frame: Cli
             }
             let len = blob.len();
             g.msgs.push_back((seq, blob, t + g.ttl));
-            let crossed = (seq + 1) % SEQ_BLOCK == 0;
+            let crossed = (seq + 1).is_multiple_of(SEQ_BLOCK);
             st.bytes += len;
             if crossed {
                 save_meta(shared, &st);

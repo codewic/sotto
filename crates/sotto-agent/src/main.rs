@@ -36,11 +36,10 @@ fn main() {
         }
     }
     let data = data.unwrap_or_else(|| fail("--data is required"));
-    if let Some(l) = &listen {
-        if !(l.starts_with("127.0.0.1:") || l.starts_with("[::1]:")) {
+    if let Some(l) = &listen
+        && !(l.starts_with("127.0.0.1:") || l.starts_with("[::1]:")) {
             fail("--listen only accepts loopback addresses");
         }
-    }
     std::fs::create_dir_all(&data).unwrap_or_else(|e| fail(&format!("can't create {}: {e}", data.display())));
     let token = token.unwrap_or_else(|| sotto_core::hex(&sotto_core::rand::bytes::<32>()));
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| fail(&e.to_string()));
@@ -55,7 +54,7 @@ fn main() {
             let _ = std::fs::remove_file(&path);
             let listener = tokio::net::UnixListener::bind(&path).unwrap_or_else(|e| fail(&format!("can't bind socket: {e}")));
             restrict(&path);
-            let _ = agent.endpoint.set(format!("unix:{}", std::path::Path::new(&path).canonicalize().unwrap_or_else(|_| path.clone().into()).display()));
+            let _ = agent.endpoint.set(format!("unix:{}", std::path::Path::new(&path).canonicalize().unwrap_or_else(|_| path.clone()).display()));
             println!("SOTTO_AGENT_READY {token}");
             axum::serve(listener, app).with_graceful_shutdown(shutdown).await.unwrap_or_else(|e| fail(&e.to_string()));
         } else {

@@ -130,6 +130,7 @@ async fn run(args: &[String]) -> Res<()> {
     summary(&out).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn one_call(
     host: &mut Ctl,
     callee: &mut Ctl,

@@ -150,12 +150,11 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let mut text = args.message.join(" ");
-    if text.is_empty() {
-        if std::io::stdin().read_to_string(&mut text).is_err() {
+    if text.is_empty()
+        && std::io::stdin().read_to_string(&mut text).is_err() {
             eprintln!("sotto-hook: couldn't read standard input.");
             return ExitCode::from(2);
         }
-    }
     let text = text.trim_end();
     if text.is_empty() {
         eprintln!("sotto-hook: nothing to send.");

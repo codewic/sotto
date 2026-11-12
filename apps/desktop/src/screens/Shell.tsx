@@ -13,6 +13,7 @@ import { Drops } from "./Drops";
 import { Review } from "./Review";
 import { CallLayer } from "./Calls";
 import { Settings } from "./Settings";
+import { UpdateNotice } from "./Updates";
 
 export type Screen = "conversations" | "drops" | "cases" | "review" | "settings";
 type NavState = { screen: Screen; param?: string };
@@ -153,6 +154,7 @@ export function Shell({ status }: { status: Status }) {
             })}
           </nav>
           <div className="mt-auto mr-2 flex flex-col gap-2 md:mr-3">
+            <UpdateNotice />
             <div className="hidden md:block">
               <ConnectionCard status={status} />
             </div>

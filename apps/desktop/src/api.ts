@@ -10,6 +10,8 @@ type Bridge = {
   openCall?(callId: string): Promise<void>;
   setZoom?(factor: number): Promise<void>;
   setAppearance?(a: { scheme: "light" | "dark"; background: string }): Promise<void>;
+  /** Install the staged update after checking its signature again, then restart. */
+  installUpdate?(): Promise<{ ok: boolean; error?: string }>;
 };
 
 declare global {

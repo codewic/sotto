@@ -197,12 +197,11 @@ fn session(app: &App, headers: &HeaderMap) -> (String, String, bool) {
     let t = now();
     let mut s = app.sessions();
     s.retain(|_, v| v.last + SESSION_IDLE > t);
-    if let Some(sid) = cookie_sid(headers) {
-        if let Some(sess) = s.get_mut(&sid) {
+    if let Some(sid) = cookie_sid(headers)
+        && let Some(sess) = s.get_mut(&sid) {
             sess.last = t;
             return (sid, sess.csrf.clone(), false);
         }
-    }
     let sid = hex(&sotto_core::rand::bytes::<32>());
     let csrf = hex(&sotto_core::rand::bytes::<16>());
     if s.len() >= MAX_SESSIONS {
@@ -515,11 +514,10 @@ async fn delete_reply(State(app): State<Arc<App>>, headers: HeaderMap, Form(f): 
 }
 
 async fn logout(State(app): State<Arc<App>>, headers: HeaderMap, Form(f): Form<CsrfForm>) -> Response {
-    if let Some(sid) = cookie_sid(&headers) {
-        if csrf_ok(&app, &sid, &f.csrf) {
+    if let Some(sid) = cookie_sid(&headers)
+        && csrf_ok(&app, &sid, &f.csrf) {
             app.sessions().remove(&sid);
         }
-    }
     let mut r = Html(pages::message(
         &app.cfg.name,
         "You've left",

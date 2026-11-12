@@ -17,6 +17,7 @@ pub mod shared;
 pub mod state;
 pub mod tags;
 pub mod travel;
+pub mod updates;
 
 use axum::Json;
 use axum::http::StatusCode;

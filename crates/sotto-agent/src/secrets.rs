@@ -106,13 +106,12 @@ pub fn on_payload(agent: &Arc<Agent>, s: &Session, contact: Id, p: Payload) -> R
             emit(agent, &contact);
         }
         Payload::SecretOpened { id } => {
-            if let Some(mut x) = s.cases.get::<Secret>(&key(&contact, &id))? {
-                if x.mine && x.opened_at.is_none() {
+            if let Some(mut x) = s.cases.get::<Secret>(&key(&contact, &id))?
+                && x.mine && x.opened_at.is_none() {
                     x.opened_at = Some(time::now());
                     s.cases.put(&key(&contact, &id), &x)?;
                     emit(agent, &contact);
                 }
-            }
         }
         _ => {}
     }

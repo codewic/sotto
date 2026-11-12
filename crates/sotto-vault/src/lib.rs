@@ -371,7 +371,7 @@ impl Store {
     fn write_raw(&self, name: &str, bytes: &[u8]) -> Result<()> {
         let (path, fname) = self.record_path(name);
         let mut padded = sotto_core::pad::pad(bytes, Self::bucket(bytes.len() + 4))?;
-        let sealed = aead::seal_random(&*self.key, &padded, fname.as_bytes());
+        let sealed = aead::seal_random(&self.key, &padded, fname.as_bytes());
         padded.zeroize();
         write_atomic(&path, &sealed)
     }
@@ -383,7 +383,7 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let padded = Zeroizing::new(aead::open_random(&*self.key, &data, fname.as_bytes()).map_err(|_| VaultError::Corrupt)?);
+        let padded = Zeroizing::new(aead::open_random(&self.key, &data, fname.as_bytes()).map_err(|_| VaultError::Corrupt)?);
         Ok(Some(Zeroizing::new(sotto_core::pad::unpad(&padded)?.to_vec())))
     }
 
@@ -544,7 +544,7 @@ impl Store {
             let fname = entry.file_name().to_string_lossy().to_string();
             let readable = fs::read(entry.path())
                 .ok()
-                .map(|d| aead::open_random(&*self.key, &d, fname.as_bytes()).is_ok())
+                .map(|d| aead::open_random(&self.key, &d, fname.as_bytes()).is_ok())
                 .unwrap_or(false);
             if !readable {
                 let _ = fs::remove_file(entry.path());

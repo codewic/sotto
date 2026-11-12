@@ -81,7 +81,7 @@ enum GroupMsg {
     /// From the creator: who else may manage the group, as (name, MLS signature key).
     Admins(Vec<(String, Vec<u8>)>),
     /// A file; `name` is the sender's chosen name, as on text.
-    File { id: Id, name: String, file: FileRef, caption: String, sent_at: u64 },
+    File { id: Id, name: String, file: Box<FileRef>, caption: String, sent_at: u64 },
     /// From an admin to the creator: please make this change. Only the creator commits, so
     /// admins ask, and the creator's desk carries it out.
     Propose(Proposal),
@@ -334,28 +334,26 @@ pub async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u6
                     }
                 }
                 Ok(GroupMsg::Edit { target, body }) => {
-                    if let Some((n, mut m)) = find_msg(s, &g.id, &target) {
-                        if m.author_key == sender_key {
+                    if let Some((n, mut m)) = find_msg(s, &g.id, &target)
+                        && m.author_key == sender_key {
                             m.body = body.chars().take(12_000).collect();
                             m.edited = true;
                             s.cases.put(&n, &m)?;
                         }
-                    }
                 }
                 Ok(GroupMsg::Delete { target }) => {
-                    if let Some((n, m)) = find_msg(s, &g.id, &target) {
-                        if m.author_key == sender_key {
+                    if let Some((n, m)) = find_msg(s, &g.id, &target)
+                        && m.author_key == sender_key {
                             s.cases.delete(&n)?;
                             crate::shared::remove(s, &file_at(&g.id, &target));
                         }
-                    }
                 }
                 Ok(GroupMsg::File { id, name, file, caption, sent_at }) => {
                     if find_msg(s, &g.id, &id).is_none() {
                         let author: String = if name.trim().is_empty() { credential } else { name }.chars().take(60).collect();
                         let caption: String = caption.chars().take(2000).collect();
                         let file_name = file.name.clone();
-                        crate::shared::receive(agent, s, &file_at(&g.id, &id), file, json!({ "type": "group", "id": hex(&g.id) }))?;
+                        crate::shared::receive(agent, s, &file_at(&g.id, &id), *file, json!({ "type": "group", "id": hex(&g.id) }))?;
                         let m = Stored {
                             id,
                             author: author.clone(),
@@ -717,7 +715,7 @@ fn gid(s: &str) -> Result<Id, ApiError> {
 async fn list(State(agent): A) -> R {
     let s = agent.session().await?;
     let mut v = records(&s);
-    v.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    v.sort_by_key(|x| std::cmp::Reverse(x.last_activity));
     let me = my_identity(&s).await;
     Ok(Json(json!(v.iter().map(|g| group_json(&s, g, &me)).collect::<Vec<_>>())))
 }
@@ -1146,7 +1144,7 @@ async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, 
     let me = my_name(&s).await;
     let my_key = {
         let rt = s.cases_rt.lock().await;
-        broadcast(&s, &rt, &mut g, &GroupMsg::File { id: mid, name: me.clone(), file, caption: caption.clone(), sent_at: now_ms }).await?;
+        broadcast(&s, &rt, &mut g, &GroupMsg::File { id: mid, name: me.clone(), file: Box::new(file), caption: caption.clone(), sent_at: now_ms }).await?;
         persist_mls(&s, &rt)?;
         rt.mls.as_ref().map(|m| m.signature_key()).unwrap_or_default()
     };

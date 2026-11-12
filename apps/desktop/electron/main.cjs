@@ -16,6 +16,19 @@ let callWin = null;
 let callId = null;
 let callHost = null;
 const userData = app.getPath("userData");
+
+// The Sotto release key's public half (Ed25519), the same one pinned in sotto-core. The shell checks
+// an update's signature itself before installing, so a tampered agent alone can't install one.
+const RELEASE_PUBLIC_KEY = "7f1ed181be7057fd7cc171dadafff768aeda09c5f7ddbba2839e21a65f518a3d";
+
+/** How this copy was installed, so the agent fetches the package that can replace it. */
+function packageKind() {
+  if (process.env.APPIMAGE) return "appimage";
+  if (!app.isPackaged) return "";
+  if (process.platform === "linux") return "deb";
+  if (process.platform === "win32") return "exe";
+  return "";
+}
 const socketPath = path.join(userData, "agent.sock");
 
 function agentBinary(name) {
@@ -31,7 +44,7 @@ function startAgent() {
     if (process.env.SOTTO_TOR) args.push("--tor", process.env.SOTTO_TOR);
     agent = spawn(agentBinary("sotto-agent"), args, {
       stdio: ["ignore", "pipe", "inherit"],
-      env: { ...process.env, SOTTO_RENDER: agentBinary("sotto-render") },
+      env: { ...process.env, SOTTO_RENDER: agentBinary("sotto-render"), SOTTO_PACKAGE: packageKind() },
     });
     agent.stdout.setEncoding("utf8");
     agent.stdout.on("data", (chunk) => {
@@ -228,6 +241,51 @@ const fromApp = (e) => Boolean(e.senderFrame && e.senderFrame.url.startsWith("fi
 ipcMain.handle("sotto:request", (e, method, urlPath, body, headers) =>
   fromApp(e) ? request(method, urlPath, body, headers || {}) : { status: 403, body: { error: "Not allowed." } },
 );
+/** Verify a staged update again (signature and fingerprint), then install it and restart. */
+async function installUpdate() {
+  const crypto = require("node:crypto");
+  const r = await request("GET", "/api/updates/staged", null, {});
+  if (r.status !== 200) return { ok: false, error: "There's no update ready to install." };
+  const { path: file, kind, manifest, sig } = r.body;
+  const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(RELEASE_PUBLIC_KEY, "hex")]);
+  const key = crypto.createPublicKey({ key: spki, format: "der", type: "spki" });
+  const signed = Buffer.concat([Buffer.from("sotto-release-manifest-v1\n"), Buffer.from(manifest, "utf8")]);
+  if (!/^[0-9a-f]{128}$/.test(String(sig).trim()) || !crypto.verify(null, signed, key, Buffer.from(String(sig).trim(), "hex"))) {
+    return { ok: false, error: "The update's signature didn't check out, so it wasn't installed." };
+  }
+  const m = JSON.parse(manifest);
+  const entry = (m.files || []).find((f) => f.kind === kind && f.name === path.basename(file));
+  const bytes = fs.readFileSync(file);
+  if (!entry || crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256) {
+    return { ok: false, error: "The downloaded update didn't match its signed fingerprint, so it wasn't installed." };
+  }
+  if (kind === "appimage" && process.env.APPIMAGE) {
+    const dest = process.env.APPIMAGE;
+    const next = `${dest}.new`;
+    fs.writeFileSync(next, bytes, { mode: 0o755 });
+    fs.renameSync(next, dest);
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  }
+  if (kind === "deb") {
+    // The system asks for permission; nothing is installed without it.
+    const code = await new Promise((resolve) => spawn("pkexec", ["apt-get", "install", "-y", file], { stdio: "ignore" }).on("exit", resolve).on("error", () => resolve(-1)));
+    if (code !== 0) return { ok: false, error: "The update wasn't installed (permission was refused or the installer failed)." };
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  }
+  if (kind === "exe") {
+    spawn(file, ["/S"], { detached: true, stdio: "ignore" }).unref();
+    app.quit();
+    return { ok: true };
+  }
+  return { ok: false, error: "This copy of Sotto can't update itself. Download the new version from the releases page." };
+}
+
+ipcMain.handle("sotto:install-update", (e) => (fromApp(e) ? installUpdate().catch(() => ({ ok: false, error: "The update couldn't be installed." })) : { ok: false, error: "Not allowed." }));
+
 ipcMain.handle("sotto:save-dialog", async (e, name) => {
   if (!fromApp(e)) return null;
   const r = await dialog.showSaveDialog(win, { defaultPath: String(name || "clean-copy.pdf"), title: "Save clean copy" });
