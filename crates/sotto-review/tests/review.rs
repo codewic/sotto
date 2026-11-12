@@ -131,10 +131,79 @@ fn unsupported_and_hostile_inputs_fail_closed() {
 
 #[test]
 fn sandbox_has_no_network_or_home() {
-    let argv = sotto_review::sandbox::command(std::path::Path::new("/r"), std::path::Path::new("/i"), std::path::Path::new("/o"), std::path::Path::new("/o.id"));
+    let argv = sotto_review::sandbox::command(std::path::Path::new("/r"), std::path::Path::new("/i"), std::path::Path::new("/o"), std::path::Path::new("/o.id"), None);
     let joined = argv.join(" ");
     assert!(joined.contains("--unshare-all"));
     assert!(joined.contains("--clearenv"));
     assert!(!joined.contains("/home"));
     assert!(!joined.contains("--share-net"));
+}
+
+/// A 40 x 20 JPEG (left half red, right half blue) that says "turn me 90 degrees clockwise" in
+/// its EXIF, and carries a comment with a place name, the way cameras and phones leave details.
+fn sideways_jpeg_with_details() -> Vec<u8> {
+    let (w, h) = (40u32, 20u32);
+    let mut px = Vec::new();
+    for _y in 0..h {
+        for x in 0..w {
+            px.extend(if x < w / 2 { [220, 30, 30] } else { [30, 30, 220] });
+        }
+    }
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    // EXIF: little-endian TIFF with one entry, Orientation (0x0112) = 6.
+    let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+    tiff.extend([1, 0]);
+    tiff.extend([0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0]);
+    tiff.extend([0, 0, 0, 0]);
+    let mut exif = b"Exif\0\0".to_vec();
+    exif.extend(tiff);
+    let comment = b"Taken at Apapa port, 6.4474 N 3.3640 E";
+    let mut out = vec![0xFF, 0xD8];
+    out.extend([0xFF, 0xE1]);
+    out.extend(((exif.len() + 2) as u16).to_be_bytes());
+    out.extend(exif);
+    out.extend([0xFF, 0xFE]);
+    out.extend(((comment.len() + 2) as u16).to_be_bytes());
+    out.extend(comment);
+    out.extend(&jpeg[2..]);
+    out
+}
+
+#[test]
+fn photos_come_out_upright_and_without_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.jpg");
+    std::fs::write(&input, sideways_jpeg_with_details()).unwrap();
+    let render = PathBuf::from(env!("CARGO_BIN_EXE_sotto-render"));
+    let p = sotto_review::photo(&input, &dir.path().join("work"), &render, std::time::Duration::from_secs(60)).expect("photo");
+    // Turned upright: 20 wide, 40 tall, red on top after a clockwise turn.
+    assert_eq!((p.width, p.height, p.mime), (20, 40, "image/jpeg"));
+    let hay = |n: &[u8]| p.bytes.windows(n.len()).any(|w| w == n);
+    assert!(!hay(b"Exif") && !hay(b"Apapa") && !hay(&[0xFF, 0xFE]), "details survived the clean copy");
+    let img = image::load_from_memory(&p.bytes).unwrap().to_rgb8();
+    let (top, bottom) = (img.get_pixel(10, 5), img.get_pixel(10, 35));
+    assert!(top[0] > 150 && top[2] < 100, "top should be red, got {top:?}");
+    assert!(bottom[2] > 150 && bottom[0] < 100, "bottom should be blue, got {bottom:?}");
+}
+
+#[test]
+fn screenshots_stay_png_and_huge_photos_shrink() {
+    let dir = tempfile::tempdir().unwrap();
+    let render = PathBuf::from(env!("CARGO_BIN_EXE_sotto-render"));
+    // A wide PNG with transparency: kept as PNG, longest side capped, transparent parts white.
+    let (w, h) = (3000u32, 1000u32);
+    let img = image::RgbaImage::from_fn(w, h, |x, _| if x < 1500 { image::Rgba([0, 0, 0, 0]) } else { image::Rgba([10, 120, 60, 255]) });
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let input = dir.path().join("shot.png");
+    std::fs::write(&input, png).unwrap();
+    let p = sotto_review::photo(&input, &dir.path().join("work"), &render, std::time::Duration::from_secs(60)).expect("photo");
+    assert_eq!(p.mime, "image/png");
+    assert_eq!(p.width.max(p.height), sotto_review::PHOTO_MAX);
+    let out = image::load_from_memory(&p.bytes).unwrap().to_rgb8();
+    assert_eq!(out.get_pixel(10, 10).0, [255, 255, 255]);
+    // Not a photo at all: refused.
+    std::fs::write(&input, b"%PDF-1.4 not a photo").unwrap();
+    assert!(sotto_review::photo(&input, &dir.path().join("work2"), &render, std::time::Duration::from_secs(60)).is_err());
 }

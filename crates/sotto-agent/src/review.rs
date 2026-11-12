@@ -20,7 +20,7 @@ pub fn scratch_dir() -> PathBuf {
     base.join(format!("sotto-review-{}", sotto_core::hex(&sotto_core::rand::bytes::<8>())))
 }
 
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {

@@ -24,6 +24,9 @@
 :root,
 [data-theme="light"] {
   --background: #f3f3f3;
+  /* The photo viewer sits on the same near-black in every theme, so photos read true. */
+  --scrim: rgb(9 9 11 / 0.95);
+  --scrim-fg: #ffffff;
   --pane: #ffffff;
   --foreground: #171717;
   --muted: #f1f1f1;
@@ -321,6 +324,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-scrim-fg: var(--scrim-fg);
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
@@ -681,4 +685,27 @@ button:hover .broadcast-glyph .wave-2 {
   --av-mid-c: 0.11;
   --av-fg-l: 80%;
   --av-fg-c: 0.12;
+}
+
+/* Photos: a quiet sweep while a photo is being cleaned, and the viewer fading in. */
+.photo-wait {
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, currentColor 10%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: photo-wait 1.6s var(--ease-smooth) infinite;
+}
+@keyframes photo-wait {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+.viewer-in {
+  animation: viewer-in 180ms var(--ease-smooth) both;
+}
+@keyframes viewer-in {
+  from { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .photo-wait,
+  .viewer-in {
+    animation: none;
+  }
 }

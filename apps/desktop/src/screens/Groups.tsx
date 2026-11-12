@@ -12,9 +12,10 @@ import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
 import { Composer, type ComposerHandle, DraftLine, type Member, uploadFile } from "../ui/Composer";
+import { Album, PhotoViewer, type ViewerItem, isPhotoFile, withAlbums } from "../ui/Photo";
 import { useCalls } from "./Calls";
 import { contactName } from "./ConversationDialogs";
-import { Bubble, ContextMenu, MenuItem } from "./Conversations";
+import { AlbumMeta, Bubble, ContextMenu, MenuItem } from "./Conversations";
 import { useNav } from "./Shell";
 import { useMyAvatar } from "./AvatarPicker";
 
@@ -165,8 +166,8 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
     refresh();
   }
 
-  async function sendFile(file: File, caption: string) {
-    await uploadFile(`/api/groups/${group.id}/files`, file, caption);
+  async function sendFile(file: File, caption: string, asPhoto: boolean) {
+    await uploadFile(`/api/groups/${group.id}/files`, file, caption, asPhoto);
     setReplyTo(null);
     refresh();
   }
@@ -223,6 +224,14 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
     [group.members, contacts],
   );
   const callBusy = calls.calls.some((c) => c.phase !== "ended");
+  const [viewing, setViewing] = useState<string | null>(null);
+  const photos: ViewerItem[] = useMemo(
+    () =>
+      list
+        .filter((m) => m.kind === "file" && m.file && isPhotoFile(m.file.mime) && (m.outgoing || m.file.status === "ready"))
+        .map((m) => ({ key: `s:sblob/g/${group.id}/${m.id}`, own: m.outgoing, name: m.file?.name ?? "Photo", caption: m.file?.caption, who: m.outgoing ? "You" : (m.author ?? "Someone"), at: m.received_at })),
+    [list, group.id],
+  );
   const mentionNames = useMemo(() => ({ names: group.members.map((m) => m.name), me: group.members.find((m) => m.you)?.name }), [group.members]);
 
   return (
@@ -323,7 +332,19 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                 {d.runs.map((run) => (
                   <div key={run[0].id} className={`flex flex-col gap-0.5 ${run[0].kind === "system" ? "items-center" : run[0].outgoing ? "items-end" : "items-start"}`}>
                     {run[0].kind !== "system" && !run[0].outgoing && <div className="mb-0.5 ml-3 text-[12px] font-semibold text-muted-foreground">{run[0].author}</div>}
-                    {run.map((m, i) => (
+                    {withAlbums(run).map((it) =>
+                      it.kind === "album" ? (
+                        <Album
+                          key={it.ms[0].id}
+                          ms={it.ms}
+                          keyOf={(m) => `s:sblob/g/${group.id}/${m.id}`}
+                          mine={it.ms[0].outgoing}
+                          meta={<AlbumMeta last={it.ms[it.ms.length - 1]} />}
+                          onOpen={setViewing}
+                          onMenu={(m, x, y) => setMenu({ m, x, y })}
+                        />
+                      ) : (
+                        ((m: Message, i: number) => (
                       <Fragment key={m.id}>
                         <Bubble
                           m={m}
@@ -331,6 +352,8 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                           last={i === run.length - 1}
                           reply={m.reply_to ? byId.get(m.reply_to) : undefined}
                           replyName={(r) => (r.outgoing ? "You" : (r.author ?? "Someone"))}
+                          photoKey={`s:sblob/g/${group.id}/${m.id}`}
+                          onOpenPhoto={() => setViewing(`s:sblob/g/${group.id}/${m.id}`)}
                           mentions={mentionNames}
                           flash={flash === m.id || search.current === m.id}
                           reviewing={reviewing === m.id}
@@ -349,7 +372,9 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                           onRetry={() => {}}
                         />
                       </Fragment>
-                    ))}
+                        ))(it.m, it.i)
+                      ),
+                    )}
                   </div>
                 ))}
               </div>
@@ -413,6 +438,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
           </div>
         )}
       {info && <GroupInfo group={group} contacts={contacts} floating={narrow} onClose={() => setInfo(false)} onGone={onGone} />}
+      {viewing && photos.some((p) => p.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((p) => p.key === viewing)} onClose={() => setViewing(null)} />}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           {!group.removed && (

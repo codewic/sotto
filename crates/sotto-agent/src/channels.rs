@@ -443,7 +443,7 @@ fn from_owner(agent: &Arc<Agent>, s: &Arc<Session>, contact: Id, signal: Channel
             if find_post(s, &channel_id, &post_id).is_some() {
                 return Ok(());
             }
-            let name = file.name.clone();
+            let name = if file.mime.starts_with("image/") { "Photo".to_string() } else { file.name.clone() };
             crate::shared::receive(agent, s, &file_at(&channel_id, &post_id), *file, json!({ "type": "channel", "id": hex(&channel_id) }))?;
             put_post(s, &channel_id, &Post { id: post_id, body: clean(&caption, 2000), sent_at, received_at: time::now_ms(), edited: false, replies: 0 })?;
             c.unread += 1;
@@ -842,6 +842,7 @@ async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, 
     let name = crate::api::header_text(&headers, "x-file-name");
     let caption = clean(&crate::api::header_text(&headers, "x-caption"), 2000);
     let mime = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    let (name, mime, body) = crate::photos::maybe_clean(&headers, name, mime, body).await?;
     let pid = new_id();
     let to = joined(&c);
     // One upload per 250 followers; each follower gets the copy meant for them.
@@ -853,7 +854,7 @@ async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, 
     let now_ms = time::now_ms();
     let p = Post { id: pid, body: caption.clone(), sent_at: now_ms, received_at: now_ms, edited: false, replies: 0 };
     put_post(&s, &c.id, &p)?;
-    touch(&mut c, format!("You: {}", f.name));
+    touch(&mut c, if mime.starts_with("image/") { "You: Photo".to_string() } else { format!("You: {}", f.name) });
     save(&s, &c)?;
     let channel_id = c.id;
     for (chunk, file) in to.chunks(PER_COPY).zip(refs) {

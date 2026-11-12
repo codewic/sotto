@@ -117,6 +117,37 @@ fn read_capped(path: &Path, cap: usize) -> String {
     String::from_utf8_lossy(&data).chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
 }
 
+/// Longest side of a photo's clean copy (the renderer enforces it; this checks it).
+pub const PHOTO_MAX: usize = 2560;
+
+/// A photo rebuilt from pixels: no metadata (location, camera, times) can survive.
+#[derive(Debug)]
+pub struct Photo {
+    pub width: usize,
+    pub height: usize,
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+/// Clean a photo: it's decoded only inside the sandbox, which hands back raw pixels, and the
+/// clean copy is encoded here from those pixels alone. Used for photos you send and photos you
+/// receive alike.
+pub fn photo(input: &Path, work: &Path, render: &Path, timeout: Duration) -> Result<Photo, ReviewError> {
+    let raw = work.join("raw");
+    fs::create_dir_all(&raw).map_err(|_| ReviewError::Io)?;
+    sandbox::run_mode(render, input, &raw, timeout, Some("photo"))?;
+    let lossless = read_capped(&raw.join("info.txt"), 1024).trim() == "Format: png";
+    let data = read_untrusted(&raw.join("photo.ppm"), PHOTO_MAX * PHOTO_MAX * 3 + 64).ok_or_else(|| ReviewError::Render("unexpected output from the renderer".into()))?;
+    let _ = fs::remove_dir_all(&raw);
+    let r = raster::parse_ppm(&data)?;
+    drop(data);
+    if r.width.max(r.height) > PHOTO_MAX {
+        return Err(ReviewError::Render("unexpected output from the renderer".into()));
+    }
+    let (mime, bytes) = if lossless { ("image/png", raster::encode_png(&r, r.width)?) } else { ("image/jpeg", raster::encode_jpeg(&r, 86)?) };
+    Ok(Photo { width: r.width, height: r.height, mime, bytes })
+}
+
 /// Review `input`, writing everything into `work` (an empty directory, ideally on tmpfs).
 pub fn review(input: &Path, work: &Path, opts: &Options) -> Result<Report, ReviewError> {
     let raw = work.join("raw");

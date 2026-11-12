@@ -9,6 +9,10 @@
 //! /out/status.txt   "ok <kind>" or "error <reason>"
 //! ```
 //!
+//! With a third argument `photo`, an image becomes one upright, flattened, size-capped
+//! `/out/photo.ppm` instead, and `info.txt` says only `Format: png` or `Format: jpeg` (the kind of
+//! file the clean copy should be).
+//!
 //! Nothing here is trusted by the caller: the agent parses only the simple
 //! formats above, with strict limits, outside the sandbox.
 
@@ -125,6 +129,52 @@ fn render_image(input: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Longest side of a photo's clean copy.
+const PHOTO_MAX: u32 = 2560;
+
+fn render_photo(input: &Path, out: &Path) -> Result<(), String> {
+    let data = fs::read(input).map_err(|_| "the file could not be read")?;
+    let format = image::guess_format(&data).map_err(|_| "this isn't a photo")?;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(&data), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(|_| "the photo could not be decoded")?;
+    // Phones store photos sideways and say how to turn them; turn them before the tag is dropped.
+    let orientation = image::ImageDecoder::orientation(&mut decoder).unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|_| "the photo could not be decoded")?;
+    img.apply_orientation(orientation);
+    // Transparent parts become white.
+    let rgba = img.to_rgba8();
+    drop(img);
+    let (w, h) = rgba.dimensions();
+    let mut rgb = image::RgbImage::new(w, h);
+    for (p, q) in rgba.pixels().zip(rgb.pixels_mut()) {
+        let a = u32::from(p[3]);
+        for c in 0..3 {
+            q[c] = ((u32::from(p[c]) * a + 255 * (255 - a)) / 255) as u8;
+        }
+    }
+    drop(rgba);
+    let rgb = if w.max(h) > PHOTO_MAX {
+        let scale = PHOTO_MAX as f32 / w.max(h) as f32;
+        let (nw, nh) = (((w as f32 * scale).round() as u32).clamp(1, PHOTO_MAX), ((h as f32 * scale).round() as u32).clamp(1, PHOTO_MAX));
+        image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Triangle)
+    } else {
+        rgb
+    };
+    let (w, h) = rgb.dimensions();
+    let mut f = fs::File::create(out.join("photo.ppm")).map_err(|_| "cannot write output")?;
+    write!(f, "P6\n{w} {h}\n255\n").map_err(|_| "cannot write output")?;
+    f.write_all(rgb.as_raw()).map_err(|_| "cannot write output")?;
+    // Screenshots and drawings stay sharp as PNG; photographs become JPEG.
+    let lossless = matches!(format, image::ImageFormat::Png | image::ImageFormat::Gif | image::ImageFormat::Bmp);
+    fs::write(out.join("info.txt"), if lossless { "Format: png" } else { "Format: jpeg" }).map_err(|_| "cannot write output")?;
+    Ok(())
+}
+
 fn convert_office(input: &Path, ext: &str) -> Result<PathBuf, String> {
     let work = Path::new("/tmp/conv");
     fs::create_dir_all(work).map_err(|_| "no scratch space")?;
@@ -153,6 +203,20 @@ fn main() {
         b.truncate(n);
         b
     };
+    if args.get(2).map(String::as_str) == Some("photo") {
+        let result = match detect(&head) {
+            Kind::Image => render_photo(input, out),
+            _ => Err("this isn't a photo".to_string()),
+        };
+        match result {
+            Ok(()) => status(out, "ok photo"),
+            Err(e) => {
+                status(out, &format!("error {e}"));
+                std::process::exit(3);
+            }
+        }
+        return;
+    }
     let result = match detect(&head) {
         Kind::Pdf => render_pdf(input, out).map(|_| "pdf"),
         Kind::Image => render_image(input, out).map(|_| "image"),

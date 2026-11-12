@@ -92,7 +92,7 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
       {current && <InCallBar call={current} name={nameOf(byId.get(current.contact_id))} />}
       {children}
       {ringing && <IncomingCall key={ringing.id} call={ringing} contact={byId.get(ringing.contact_id)} />}
-      <Dialog open={setup} onClose={() => setSetup(false)} title="Set up calls first" description="Calls go through a call server your organization runs. Add its address in Settings, then call again.">
+      <Dialog open={setup} onClose={() => setSetup(false)} title="Calls are turned off" description="Calls need a call server, and none is set. Turn calls back on in Settings (Calls), then call again.">
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setSetup(false)}>
             Not now
@@ -130,7 +130,7 @@ function HighRiskNotice({ contact, onClose, onAgree }: { contact: Contact | null
   return (
     <Dialog open={!!contact} onClose={onClose} title="Before your first call in High risk mode">
       <div className="flex flex-col gap-4 text-[13.5px] leading-relaxed text-muted-foreground">
-        <p>Messages travel over Tor. Calls can't: live voice over Tor is too slow to talk. So a call goes through your organization's call server.</p>
+        <p>Messages travel over Tor. Calls can't: live voice over Tor is too slow to talk. So a call goes through a call server instead.</p>
         <ul className="flex flex-col gap-1.5">
           <li className="flex gap-2">
             <span aria-hidden="true" className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" />

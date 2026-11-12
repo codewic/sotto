@@ -173,7 +173,7 @@ export type CallView = {
   invited: string[];
 };
 
-export type CallSettings = { server: string; high_risk_ack: boolean; allowed: boolean; needs_notice: boolean };
+export type CallSettings = { server: string; default_server: string; is_default: boolean; high_risk_ack: boolean; allowed: boolean; needs_notice: boolean };
 
 export type ChannelFollower = { contact_id: string; joined: boolean; since: number };
 

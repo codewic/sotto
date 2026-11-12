@@ -930,3 +930,119 @@ async fn send_later_and_group_mentions() {
     })
     .await;
 }
+
+/// Upload with extra headers (here, `x-send-as: photo`).
+async fn upload_as(r: &Router, path: &str, name: &str, mime: &str, bytes: &[u8], photo: bool) -> (StatusCode, Value) {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::HOST, "127.0.0.1")
+        .header(header::CONTENT_TYPE, mime)
+        .header("x-file-name", name)
+        .header("x-caption", "");
+    if photo {
+        req = req.header("x-send-as", "photo");
+    }
+    let res = r.clone().oneshot(req.body(Body::from(bytes.to_vec())).unwrap()).await.unwrap();
+    let status = res.status();
+    let b = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&b).unwrap_or(Value::Null))
+}
+
+async fn get_bytes(r: &Router, path: &str) -> (StatusCode, Vec<u8>) {
+    let req = Request::builder().method("GET").uri(path).header(header::AUTHORIZATION, format!("Bearer {TOKEN}")).header(header::HOST, "127.0.0.1").body(Body::empty()).unwrap();
+    let res = r.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    (status, res.into_body().collect().await.unwrap().to_bytes().to_vec())
+}
+
+/// A sideways 40 x 20 JPEG with an orientation tag and a comment naming a place.
+fn sideways_photo() -> Vec<u8> {
+    let (w, h) = (40usize, 20usize);
+    let mut rgb = Vec::new();
+    for _ in 0..h {
+        for x in 0..w {
+            rgb.extend(if x < w / 2 { [220u8, 30, 30] } else { [30, 30, 220] });
+        }
+    }
+    let jpeg = sotto_review::raster::encode_jpeg(&sotto_review::raster::Raster { width: w, height: h, rgb }, 95).unwrap();
+    let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0".to_vec();
+    exif.extend([0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+    let comment = b"Taken at Apapa port, 6.4474 N 3.3640 E";
+    let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    out.extend(((exif.len() + 2) as u16).to_be_bytes());
+    out.extend(exif);
+    out.extend([0xFF, 0xFE]);
+    out.extend(((comment.len() + 2) as u16).to_be_bytes());
+    out.extend(comment);
+    out.extend(&jpeg[2..]);
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn photos_are_cleaned_when_sent_and_when_received() {
+    // The sandbox renderer is built next to the test binaries by `cargo test --workspace`.
+    let render = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("sotto-render");
+    if !render.exists() || !sotto_review::sandbox::available() {
+        eprintln!("skipped: needs bubblewrap and target/debug/sotto-render (cargo build -p sotto-review)");
+        return;
+    }
+    // SAFETY: tests only ever set this to the same path.
+    unsafe { std::env::set_var("SOTTO_RENDER", &render) };
+    let has = |hay: &[u8], n: &[u8]| hay.windows(n.len()).any(|w| w == n);
+    let url = relay().await;
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ra = named_desk(da.path(), &url, "owner-passcode", "Ada").await;
+    let (b_agent, rb) = desk(db.path(), &url);
+    call(&rb, "POST", "/api/setup", Some(json!({ "passcode": "member-passcode" }))).await;
+    call(&rb, "PATCH", "/api/settings", Some(json!({ "display_name": "Ben" }))).await;
+    let ben = connect(&ra, &rb, "Ben").await;
+    let ada = call(&rb, "GET", "/api/contacts", None).await.1[0]["id"].as_str().unwrap().to_string();
+
+    // Sent as a photo: what leaves Ada's desk is the clean copy, named for its format.
+    let (s, sent) = upload_as(&ra, &format!("/api/contacts/{ben}/files"), "IMG_2041.jpeg", "image/jpeg", &sideways_photo(), true).await;
+    assert_eq!(s, StatusCode::OK, "{sent}");
+    let mid = sent["id"].as_str().unwrap().to_string();
+    assert_eq!(sent["file"]["name"], "IMG_2041.jpg", "{sent}");
+    let (_, own) = call(&ra, "POST", "/api/photos/prepare", Some(json!({ "key": format!("m:file/{mid}"), "own": true }))).await;
+    assert!(own["state"] == "ready" && own["width"] == 20 && own["height"] == 40, "{own}");
+
+    // Ben's copy: cleaned again in his sandbox, upright, with nothing but pixels.
+    until("Ben has the photo", || async {
+        call(&rb, "GET", &format!("/api/contacts/{ada}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["id"] == mid.as_str() && m["file"]["status"] == "ready")
+    })
+    .await;
+    let key = format!("m:file/{mid}");
+    let (_, p) = call(&rb, "POST", "/api/photos/prepare", Some(json!({ "key": key }))).await;
+    assert!(p["state"] == "ready" && p["width"] == 20 && p["height"] == 40, "{p}");
+    let (s, img) = get_bytes(&rb, &format!("/api/photos/image?key={}", key.replace('/', "%2F").replace(':', "%3A"))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(img.starts_with(&[0xFF, 0xD8]) && !has(&img, b"Apapa") && !has(&img, b"Exif"), "details reached Ben");
+
+    // Sent as a file, the original bytes travel; in Extreme mode Ben's desk holds it for Show.
+    let (_, raw) = upload_as(&ra, &format!("/api/contacts/{ben}/files"), "raw.jpg", "image/jpeg", &sideways_photo(), false).await;
+    let raw_mid = raw["id"].as_str().unwrap().to_string();
+    until("Ben has the file", || async {
+        call(&rb, "GET", &format!("/api/contacts/{ada}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["id"] == raw_mid.as_str() && m["file"]["status"] == "ready")
+    })
+    .await;
+    call(&rb, "PATCH", "/api/settings", Some(json!({ "risk_mode": "extreme" }))).await;
+    let raw_key = format!("m:file/{raw_mid}");
+    let (_, held) = call(&rb, "POST", "/api/photos/prepare", Some(json!({ "key": raw_key }))).await;
+    assert_eq!(held["state"], "held", "{held}");
+    let (_, shown) = call(&rb, "POST", "/api/photos/prepare", Some(json!({ "key": raw_key, "show": true }))).await;
+    assert_eq!(shown["state"], "ready", "{shown}");
+    call(&rb, "PATCH", "/api/settings", Some(json!({ "risk_mode": "standard" }))).await;
+
+    // Deleting the message takes its clean copy with it.
+    let (s, _) = call(&rb, "DELETE", &format!("/api/contacts/{ada}/messages/{mid}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    sotto_agent::photos::sweep(&b_agent.session().await.unwrap());
+    let (s, _) = get_bytes(&rb, &format!("/api/photos/image?key={}", key.replace('/', "%2F").replace(':', "%3A"))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Not an image at all, sent as a photo: refused with a reason, nothing sent.
+    let (s, v) = upload_as(&ra, &format!("/api/contacts/{ben}/files"), "notes.jpg", "image/jpeg", b"plain text pretending", true).await;
+    assert_ne!(s, StatusCode::OK, "{v}");
+}

@@ -1,6 +1,6 @@
 # Sotto calls
 
-Status: design, not built. Calls run through a call server we host on our own VPS, with end-to-end encryption keyed from the conversation. Tor is no longer used for calls (see "Why not Tor" at the end). Supersedes the "no calls in v1" lines in SPEC.md (sections 4.2 and 11).
+Status: built; Sotto ships pointing at `https://calls.cmigl.org` (media on `wss://rtc.cmigl.org`), and organizations can set their own in Settings. Calls run through a call server we host on our own VPS, with end-to-end encryption keyed from the conversation. Tor is no longer used for calls (see "Why not Tor" at the end). Supersedes the "no calls in v1" lines in SPEC.md (sections 4.2 and 11).
 
 ## The decision in one paragraph
 

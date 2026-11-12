@@ -39,6 +39,7 @@ import { Avatar as AvatarMark, seedOf } from "../ui/Avatar";
 import { SecretCard, SendSecretDialog, secretItem } from "./Secrets";
 import { Chip, Empty, Kbd, Notice, Skeleton, Switch, bytes, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
+import { Album, InlinePhoto, PhotoViewer, type ViewerItem, isPhotoFile, withAlbums } from "../ui/Photo";
 import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
 import { AcceptDialog, DeleteDialog, InviteDialog, RenameDialog, SafetyDialog, contactName as name } from "./ConversationDialogs";
 import { useCalls } from "./Calls";
@@ -472,6 +473,15 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
   const byId = useMemo(() => new Map(list.map((m) => [m.id, m])), [list]);
   const secrets = useQuery({ queryKey: ["secrets", contact.id], queryFn: () => get<SecretView[]>(`/api/contacts/${contact.id}/secrets`) });
   const [sendingSecret, setSendingSecret] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null);
+  // Every photo in the conversation, oldest first, for the viewer's next and previous.
+  const photos: ViewerItem[] = useMemo(
+    () =>
+      list
+        .filter((m) => m.kind === "file" && m.file && isPhotoFile(m.file.mime) && (m.outgoing || m.file.status === "ready"))
+        .map((m) => ({ key: `m:file/${m.id}`, own: m.outgoing, name: m.file?.name ?? "Photo", caption: m.file?.caption, who: m.outgoing ? "You" : name(contact), at: m.received_at })),
+    [list, contact],
+  );
   // One-time secrets sit in the timeline in order with the messages.
   const timeline = useMemo(
     () => [...list, ...(secrets.data ?? []).map((x) => secretItem(contact.id, x))].sort((a, b) => a.received_at - b.received_at),
@@ -677,7 +687,19 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
               <div className="flex flex-col gap-[var(--run-gap)]">
                 {g.runs.map((run) => (
                   <div key={run[0].id} className={`flex flex-col gap-0.5 ${run[0].outgoing ? "items-end" : "items-start"}`}>
-                    {run.map((m, i) => (
+                    {withAlbums(run).map((it) =>
+                      it.kind === "album" ? (
+                        <Album
+                          key={it.ms[0].id}
+                          ms={it.ms}
+                          keyOf={(m) => `m:file/${m.id}`}
+                          mine={it.ms[0].outgoing}
+                          meta={<AlbumMeta last={it.ms[it.ms.length - 1]} />}
+                          onOpen={setViewing}
+                          onMenu={(m, x, y) => setMenu({ m, x, y })}
+                        />
+                      ) : (
+                        ((m: Message, i: number) => (
                       <Fragment key={m.id}>
                         {firstUnread.current === m.id && (
                           <div className="my-2 flex w-full items-center gap-3 text-[12px] font-medium text-primary">
@@ -697,6 +719,8 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                           replyName={(r) => (r.outgoing ? "You" : name(contact))}
                           flash={flash === m.id || search.current === m.id}
                           reviewing={reviewing === m.id}
+                          photoKey={`m:file/${m.id}`}
+                          onOpenPhoto={() => setViewing(`m:file/${m.id}`)}
                           onReply={() => {
                             setEditing(null);
                             setReplyTo(m);
@@ -713,7 +737,9 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                         />
                         )}
                       </Fragment>
-                    ))}
+                        ))(it.m, it.i)
+                      ),
+                    )}
                   </div>
                 ))}
               </div>
@@ -761,7 +787,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                 )
               }
               onSendText={sendText}
-              onSendFile={(f, caption) => uploadFile(`/api/contacts/${contact.id}/files`, f, caption)}
+              onSendFile={(f, caption, photo) => uploadFile(`/api/contacts/${contact.id}/files`, f, caption, photo)}
               onEscape={() => {
                 setEditing(null);
                 setReplyTo(null);
@@ -796,6 +822,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
           </div>
         )}
       </div>
+      {viewing && photos.some((p) => p.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((p) => p.key === viewing)} onClose={() => setViewing(null)} />}
       <SendSecretDialog open={sendingSecret} contactId={contact.id} name={name(contact)} onClose={() => setSendingSecret(false)} />
       {info && (
         <InfoPanel
@@ -931,9 +958,62 @@ function Ticks({ m }: { m: Message }) {
   return <Check size={14} aria-label="Sent" />;
 }
 
+/** Time and ticks under an album, from its last photo. */
+export function AlbumMeta({ last }: { last: Message }) {
+  return (
+    <>
+      {last.expires_at && <Clock size={11} aria-label="Disappears" />}
+      {new Date(last.received_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+      {last.outgoing && <Ticks m={last} />}
+    </>
+  );
+}
+
+/** A file in a message: name, size, and Safe review for what you received. */
+function FileCard(props: Parameters<typeof Bubble>[0]) {
+  const { m } = props;
+  const mine = m.outgoing;
+  if (!m.file) return null;
+  return (
+    <div className="flex min-w-[250px] flex-col gap-2 pt-0.5 pb-4">
+      <div className="flex items-center gap-2.5">
+        <span className={`grid size-10 place-items-center rounded-xl ${mine ? "bg-current/10" : "bg-[var(--bubble-inset)]"}`}>
+          <FileText size={19} />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate font-medium">{m.file.name}</div>
+          <div className="text-[12px] opacity-70">
+            {bytes(m.file.size)}
+            {m.file.status === "downloading" && " · Receiving…"}
+            {m.file.status === "failed" && " · Didn't arrive intact"}
+          </div>
+        </div>
+      </div>
+      {m.file.caption && <div className="whitespace-pre-wrap"><Rich text={m.file.caption} mentions={props.mentions} /></div>}
+      {!mine && m.file.status === "ready" && m.file.review.state === "quarantined" && (
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--bubble-inset)] px-3 py-2">
+          <span className="text-[12.5px] text-muted-foreground">Quarantined until reviewed</span>
+          <Button size="sm" variant="primary" onClick={props.onReview} loading={props.reviewing}>
+            {props.reviewing ? "Opening safely…" : "Review safely"}
+          </Button>
+        </div>
+      )}
+      {!mine && m.file.review.state === "clean" && (
+        <Button size="sm" onClick={props.onOpenReview}>
+          Open clean copy · {m.file.review.pages} page{m.file.review.pages === 1 ? "" : "s"}
+        </Button>
+      )}
+      {!mine && m.file.review.state === "failed" && <span className="text-[12.5px] text-destructive">{m.file.review.reason}</span>}
+    </div>
+  );
+}
+
 export function Bubble(props: {
   /** Group members' names, so @mentions stand out (yours most). */
   mentions?: Mentions;
+  /** Where this message's photo lives (a review key), when its file is a photo. */
+  photoKey?: string;
+  onOpenPhoto?: () => void;
   m: Message;
   first: boolean;
   last: boolean;
@@ -1001,38 +1081,13 @@ export function Bubble(props: {
             </span>
           </div>
         )}
-        {m.kind === "file" && m.file && (
-          <div className="flex min-w-[250px] flex-col gap-2 pt-0.5 pb-4">
-            <div className="flex items-center gap-2.5">
-              <span className={`grid size-10 place-items-center rounded-xl ${mine ? "bg-current/10" : "bg-[var(--bubble-inset)]"}`}>
-                <FileText size={19} />
-              </span>
-              <div className="min-w-0">
-                <div className="truncate font-medium">{m.file.name}</div>
-                <div className="text-[12px] opacity-70">
-                  {bytes(m.file.size)}
-                  {m.file.status === "downloading" && " · Receiving…"}
-                  {m.file.status === "failed" && " · Didn't arrive intact"}
-                </div>
-              </div>
-            </div>
-            {m.file.caption && <div className="whitespace-pre-wrap"><Rich text={m.file.caption} mentions={props.mentions} /></div>}
-            {!mine && m.file.status === "ready" && m.file.review.state === "quarantined" && (
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--bubble-inset)] px-3 py-2">
-                <span className="text-[12.5px] text-muted-foreground">Quarantined until reviewed</span>
-                <Button size="sm" variant="primary" onClick={props.onReview} loading={props.reviewing}>
-                  {props.reviewing ? "Opening safely…" : "Review safely"}
-                </Button>
-              </div>
-            )}
-            {!mine && m.file.review.state === "clean" && (
-              <Button size="sm" onClick={props.onOpenReview}>
-                Open clean copy · {m.file.review.pages} page{m.file.review.pages === 1 ? "" : "s"}
-              </Button>
-            )}
-            {!mine && m.file.review.state === "failed" && <span className="text-[12.5px] text-destructive">{m.file.review.reason}</span>}
+        {m.kind === "file" && m.file && props.photoKey && isPhotoFile(m.file.mime) && (mine || m.file.status === "ready") && (
+          <div className="flex flex-col gap-2 pt-0.5 pb-4">
+            <InlinePhoto photoKey={props.photoKey} own={mine} name={m.file.name} onOpen={() => props.onOpenPhoto?.()} fallback={<FileCard {...props} />} />
+            {m.file.caption && <div className="max-w-[320px] whitespace-pre-wrap"><Rich text={m.file.caption} mentions={props.mentions} /></div>}
           </div>
         )}
+        {m.kind === "file" && m.file && !(props.photoKey && isPhotoFile(m.file.mime) && (mine || m.file.status === "ready")) && <FileCard {...props} />}
         <span className={`absolute right-2.5 bottom-1.5 flex items-center gap-1 text-[11px] tabular ${mine ? "text-[var(--bubble-mine-muted)]" : "text-muted-foreground"}`}>
           {meta}
         </span>

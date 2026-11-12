@@ -21,6 +21,11 @@ type R = Result<Json<Value>, ApiError>;
 
 const KEY: &str = "call-settings";
 
+/// The call server Sotto ships with: its broker hands out throwaway rooms on the media server
+/// (`wss://rtc.cmigl.org`). Used until someone enters their organization's own server, or clears
+/// the field to turn calls off.
+pub const DEFAULT_SERVER: &str = "https://calls.cmigl.org";
+
 /// Kept in the vault under its own name, so the main settings record never changes shape.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct CallSettings {
@@ -30,8 +35,9 @@ pub struct CallSettings {
     pub high_risk_ack: bool,
 }
 
+/// Saved settings, or Sotto's own call server if nothing was ever saved.
 pub fn load(s: &Session) -> CallSettings {
-    s.main.get::<CallSettings>(KEY).ok().flatten().unwrap_or_default()
+    s.main.get::<CallSettings>(KEY).ok().flatten().unwrap_or_else(|| CallSettings { server: DEFAULT_SERVER.into(), ..Default::default() })
 }
 
 fn save(s: &Session, c: &CallSettings) -> Result<(), ApiError> {
@@ -160,6 +166,8 @@ async fn list(State(agent): A) -> R {
 fn settings_json(c: &CallSettings, risk: RiskMode) -> Value {
     json!({
         "server": c.server,
+        "default_server": DEFAULT_SERVER,
+        "is_default": c.server == DEFAULT_SERVER,
         "high_risk_ack": c.high_risk_ack,
         // What the UI should do before the next call.
         "allowed": risk != RiskMode::Extreme,
@@ -325,5 +333,6 @@ mod tests {
         assert!(broker_url("http://calls.example.org").is_err(), "no plain http on the internet");
         assert!(broker_url("ftp://x").is_err());
         assert!(broker_url("https://").is_err());
+        assert_eq!(broker_url(DEFAULT_SERVER).unwrap(), DEFAULT_SERVER, "the bundled server must pass its own check");
     }
 }

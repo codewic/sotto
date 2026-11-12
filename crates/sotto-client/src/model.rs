@@ -279,6 +279,7 @@ impl Message {
     pub fn preview(&self) -> String {
         let t = match &self.body {
             Body::Text(t) | Body::System(t) => t.clone(),
+            Body::File { meta, .. } if meta.mime.starts_with("image/") => "Photo".to_string(),
             Body::File { meta, .. } => format!("File: {}", meta.name),
         };
         t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()

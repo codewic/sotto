@@ -15,8 +15,21 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 - [x] Signed automatic updates: agent checks and stages (`updates.rs`), shell re-verifies and installs, update notice and About panel; test `updates_install_only_signed_matching_packages`
 - [x] Release workflow builds AppImage and .deb into an unsigned draft; `sotto-release publish` checks, signs and publishes
 - [ ] Windows installer (the agent and review sandbox are Linux-only today) and macOS (needs an Apple developer account)
-- [ ] Publish v0.2.0: CI draft built; the owner runs `sotto-release publish v0.2.0`
+- [x] v0.2.0 and v0.2.1 published, verified from the public links
 - [ ] Next from the plan: media, then Files (`docs/plan-updates-composer-media.md`)
+
+## Media (plan section 3)
+- [x] Send as photo (default for images) or as the original file; photos are cleaned in the sandbox before upload: upright, no location, camera details or times, at most 2560 px
+- [x] Received photos are decoded only in the sandbox and shown as a clean copy rebuilt from pixels; held for Show in Extreme mode and from the anonymous inbox; test `photos_are_cleaned_when_sent_and_when_received`
+- [x] Inline photos at their own shape, albums for photos sent together, a full-screen viewer (zoom, pan, next and previous, save a copy)
+- [x] Clean photo copies and Safe review results are swept once their message is gone (deleted or expired)
+- [x] List previews say "Photo"
+- [ ] Blurred placeholder from the sender's preview (needs a new message type)
+- [ ] Video and audio (preview frame and playback via the sandbox), voice notes
+- [ ] Forward a photo; Media, Files, Voice and Links tabs in the info panel
+
+## Calls
+- [x] Ships with Sotto's own call server, `https://calls.cmigl.org` (media on `wss://rtc.cmigl.org`); organizations can set theirs, and "Use Sotto's call server" goes back
 
 ## Composer (plan section 2)
 - [x] One shared composer (`ui/Composer.tsx`) in conversations, groups and channels

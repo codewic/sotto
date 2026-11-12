@@ -4,7 +4,8 @@ import { type ReactNode, type Ref, useEffect, useImperativeHandle, useMemo, useR
 import { type ApiError, api, del, get, post } from "../api";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./Button";
-import { bytes } from "./bits";
+import { Segmented, bytes } from "./bits";
+import { isPhotoFile } from "./Photo";
 import { EMOJI, type Emoji, findEmoji } from "./emoji";
 import { plain } from "./Rich";
 import { useToast } from "./toast";
@@ -47,12 +48,14 @@ export function DraftLine({ draftKey, off = false, children }: { draftKey: strin
 }
 
 /** Upload one file to a conversation, group or channel's `/files` endpoint. */
-export function uploadFile(path: string, file: File, caption: string) {
+export function uploadFile(path: string, file: File, caption: string, asPhoto = false) {
   return file.arrayBuffer().then((buf) =>
     api("POST", path, new Uint8Array(buf), {
       "content-type": file.type || "application/octet-stream",
       "x-file-name": encodeURIComponent(file.name),
       "x-caption": encodeURIComponent(caption),
+      // The agent cleans it in the sandbox first: no location, camera details or times.
+      ...(asPhoto ? { "x-send-as": "photo" } : {}),
     }),
   );
 }
@@ -94,8 +97,8 @@ export function Composer({
   editing?: boolean;
   /** Send (or save the edit of) a text message; throw to keep the text. */
   onSendText: (text: string) => Promise<unknown>;
-  /** Send one file; the caption goes with the first file of a set. */
-  onSendFile?: (file: File, caption: string) => Promise<unknown>;
+  /** Send one file; the caption goes with the first file of a set. `asPhoto`: clean it first. */
+  onSendFile?: (file: File, caption: string, asPhoto: boolean) => Promise<unknown>;
   onArrowUpEmpty?: () => void;
   onEscape?: () => void;
   allowFiles?: boolean;
@@ -120,6 +123,8 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [asPhoto, setAsPhoto] = useState(true);
+  const [progress, setProgress] = useState<number | null>(null);
   const canAttach = allowFiles && !!onSendFile;
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -133,6 +138,7 @@ export function Composer({
     setTextState(getDraft(draftKey));
     setFiles([]);
     setPop(null);
+    setAsPhoto(true);
   }, [draftKey]);
 
   // When an edit ends (saved or cancelled), the box goes back to your draft.
@@ -257,7 +263,10 @@ export function Composer({
     let sent = 0;
     try {
       if (files.length && onSendFile) {
-        for (; sent < files.length; sent++) await onSendFile(files[sent], sent === 0 ? body : "");
+        for (; sent < files.length; sent++) {
+          setProgress(sent);
+          await onSendFile(files[sent], sent === 0 ? body : "", asPhoto && isPhotoFile(files[sent].type));
+        }
       } else {
         await onSendText(body);
       }
@@ -272,6 +281,7 @@ export function Composer({
         toast("error", `Sent ${sent} of ${files.length} files. ${files[sent].name} didn't send: ${why}`);
       } else toast("error", why);
     } finally {
+      setProgress(null);
       setSending(false);
       input.current?.focus();
     }
@@ -405,7 +415,7 @@ export function Composer({
         className="rounded-2xl bg-[var(--composer)] shadow-[var(--composer-shadow)]"
       >
         {banner}
-        {files.length > 0 && <Tray files={files} onRemove={(i) => setFiles((f) => f.filter((_, j) => j !== i))} />}
+        {files.length > 0 && <Tray files={files} asPhoto={asPhoto} setAsPhoto={setAsPhoto} progress={progress} onRemove={(i) => setFiles((f) => f.filter((_, j) => j !== i))} />}
         {hasSel && (
           <div role="toolbar" aria-label="Formatting" className="flex items-center gap-0.5 border-b border-line px-2 py-1">
             <Fmt label="Bold (Ctrl+B)" onClick={() => wrap("*", "*")}>
@@ -557,9 +567,15 @@ function Fmt({ label, onClick, children }: { label: string; onClick: () => void;
 }
 
 /** Files waiting to go, with a thumbnail for images (drawn from your own file, here). */
-function Tray({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
-  const urls = useMemo(() => files.map((f) => (f.type.startsWith("image/") ? URL.createObjectURL(f) : null)), [files]);
-  useEffect(() => () => urls.forEach((u) => u && URL.revokeObjectURL(u)), [urls]);
+function Tray({ files, onRemove, asPhoto, setAsPhoto, progress }: { files: File[]; onRemove: (i: number) => void; asPhoto: boolean; setAsPhoto: (v: boolean) => void; progress: number | null }) {
+  const photos = files.filter((f) => isPhotoFile(f.type)).length;
+  // Made and released in the same effect, so a re-run never leaves the tray with dead links.
+  const [urls, setUrls] = useState<(string | null)[]>([]);
+  useEffect(() => {
+    const made = files.map((f) => (isPhotoFile(f.type) ? URL.createObjectURL(f) : null));
+    setUrls(made);
+    return () => made.forEach((u) => u && URL.revokeObjectURL(u));
+  }, [files]);
   const total = files.reduce((n, f) => n + f.size, 0);
   return (
     <div className="border-b border-line px-3 pt-2.5 pb-2" aria-label="Files to send">
@@ -580,6 +596,7 @@ function Tray({ files, onRemove }: { files: File[]; onRemove: (i: number) => voi
             <button
               type="button"
               onClick={() => onRemove(i)}
+              disabled={progress !== null}
               aria-label={`Remove ${f.name}`}
               className="absolute top-1 right-1 grid size-5 cursor-pointer place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
             >
@@ -588,8 +605,26 @@ function Tray({ files, onRemove }: { files: File[]; onRemove: (i: number) => voi
           </div>
         ))}
       </div>
-      <div className="pt-1 text-[11.5px] text-muted-foreground tabular">
-        {files.length === 1 ? "1 file" : `${files.length} files`}, {bytes(total)}, encrypted before it leaves this computer
+      {photos > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1.5">
+          <Segmented
+            label={photos === 1 ? "Send the photo as" : "Send the photos as"}
+            value={asPhoto ? "photo" : "file"}
+            onChange={(v) => setAsPhoto(v === "photo")}
+            options={[
+              { value: "photo", label: photos === 1 ? "Photo" : "Photos" },
+              { value: "file", label: "Original file" },
+            ]}
+          />
+          <span className="text-[11.5px] text-muted-foreground">
+            {asPhoto ? "Location and camera details removed, resized if very large" : "Exact bytes, details and all"}
+          </span>
+        </div>
+      )}
+      <div className="pt-1.5 text-[11.5px] text-muted-foreground tabular" aria-live="polite">
+        {progress !== null
+          ? `Sending ${Math.min(progress + 1, files.length)} of ${files.length}…`
+          : `${files.length === 1 ? "1 file" : `${files.length} files`}, ${bytes(total)}, encrypted before it leaves this computer`}
       </div>
     </div>
   );

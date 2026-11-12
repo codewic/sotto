@@ -266,7 +266,7 @@ function CallsSection({ risk }: { risk: RiskMode }) {
   }
 
   return (
-    <Section id="settings-calls" title="Calls" description="Voice calls go through a call server your organization runs. They're end-to-end encrypted: the server can't hear them.">
+    <Section id="settings-calls" title="Calls" description="Voice calls go through a call server. They're end-to-end encrypted: the server can't hear them.">
       <form
         className="flex flex-col gap-5"
         onSubmit={async (e) => {
@@ -295,7 +295,11 @@ function CallsSection({ risk }: { risk: RiskMode }) {
           autoComplete="off"
           spellCheck={false}
           error={error}
-          hint="Ask whoever runs your organization's Sotto setup for this address. Leave it empty to turn calls off."
+          hint={
+            settings.data?.is_default && draft === null
+              ? "Sotto's own call server, ready to use. If your organization runs its own, enter its address instead. Leave it empty to turn calls off."
+              : "Your organization's call server. Leave it empty to turn calls off."
+          }
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" size="sm" disabled={draft === null || draft.trim() === saved}>
@@ -304,6 +308,23 @@ function CallsSection({ risk }: { risk: RiskMode }) {
           <Button type="button" size="sm" variant="ghost" disabled={!saved || draft !== null || test.state === "testing"} loading={test.state === "testing"} onClick={() => void runTest()}>
             Test connection
           </Button>
+          {settings.data && !settings.data.is_default && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                setError(null);
+                await patch("/api/calls/settings", { server: settings.data?.default_server });
+                setDraft(null);
+                await qc.invalidateQueries({ queryKey: ["call-settings"] });
+                toast("success", "Using Sotto's call server.");
+                void runTest();
+              }}
+            >
+              Use Sotto's call server
+            </Button>
+          )}
           {test.state === "ok" && (
             <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground" role="status">
               <Check size={14} className="text-primary" aria-hidden="true" />

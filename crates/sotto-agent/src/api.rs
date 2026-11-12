@@ -70,6 +70,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .merge(crate::avatars::routes())
         .merge(crate::updates::routes())
         .merge(crate::scheduled::routes())
+        .merge(crate::photos::routes())
         .layer(DefaultBodyLimit::max(512 << 20))
         .layer(axum::middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent.clone());
@@ -478,6 +479,7 @@ async fn send_file(State(agent): A, Path(cid): Path<String>, headers: HeaderMap,
     let name = header_text(&headers, "x-file-name");
     let caption = header_text(&headers, "x-caption");
     let mime = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    let (name, mime, body) = crate::photos::maybe_clean(&headers, name, mime, body).await?;
     Ok(Json(json!(s.engine.send_file(&id(&cid)?, &name, &mime, &caption, &mut &body[..]).await?)))
 }
 

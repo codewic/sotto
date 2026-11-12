@@ -12,6 +12,7 @@ import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, bytes } from "../ui/bits";
 import { useToast } from "../ui/toast";
 import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
+import { InlinePhoto, PhotoViewer, type ViewerItem, isPhotoFile } from "../ui/Photo";
 import { contactName } from "./ConversationDialogs";
 import { useNav } from "./Shell";
 import { useMyAvatar } from "./AvatarPicker";
@@ -136,6 +137,14 @@ export function ChannelThread({
   const { go } = useNav();
   const [dragging, setDragging] = useState(false);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const photos: ViewerItem[] = useMemo(
+    () =>
+      list
+        .filter((p) => p.file && isPhotoFile(p.file.mime) && (channel.owner || p.file.status === "ready"))
+        .map((p) => ({ key: `s:sblob/c/${channel.id}/${p.id}`, own: channel.owner, name: p.file?.name ?? "Photo", caption: p.file?.caption, who: channel.title, at: p.sent_at })),
+    [list, channel.id, channel.owner, channel.title],
+  );
   const search = useThreadSearch(list, (p) => `${p.body} ${p.file?.name ?? ""} ${p.file?.caption ?? ""}`, (p) => p.id, scroller, "data-pid");
 
   // Opening a channel marks it read; new posts while it's open do too.
@@ -163,8 +172,8 @@ export function ChannelThread({
     refresh();
   }
 
-  async function sendFile(file: File, caption: string) {
-    await uploadFile(`/api/channels/${channel.id}/files`, file, caption);
+  async function sendFile(file: File, caption: string, asPhoto: boolean) {
+    await uploadFile(`/api/channels/${channel.id}/files`, file, caption, asPhoto);
     refresh();
   }
 
@@ -279,6 +288,7 @@ export function ChannelThread({
                         reviewing={reviewing === p.id}
                         onReview={() => void review(p)}
                         onOpenReview={() => go("review", `s:sblob/c/${channel.id}/${p.id}`)}
+                        onOpenPhoto={() => setViewing(`s:sblob/c/${channel.id}/${p.id}`)}
                         onReplies={() => setPanel({ kind: "replies", post: p })}
                         onEdit={() => startEdit(p)}
                         onDelete={() => setDeleting(p)}
@@ -346,6 +356,7 @@ export function ChannelThread({
       )}
       {panel?.kind === "info" && <ChannelInfo channel={channel} contacts={contacts} ownerName={ownerName} floating={narrow} onClose={() => setPanel(null)} onGone={onGone} onOpenContact={onOpenContact} />}
       {openPost && <Replies channel={channel} post={openPost} contacts={contacts} ownerName={ownerName} floating={narrow} onClose={() => setPanel(null)} onOpenContact={onOpenContact} />}
+      {viewing && photos.some((x) => x.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((x) => x.key === viewing)} onClose={() => setViewing(null)} />}
       <Dialog open={!!deleting} onClose={() => setDeleting(null)} title="Delete this post for everyone?" description="It's removed from every follower's device, along with its replies.">
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setDeleting(null)}>
@@ -411,6 +422,7 @@ function PostCard({
   onDelete,
   onReview,
   onOpenReview,
+  onOpenPhoto,
 }: {
   p: ChannelPost;
   channel: ChannelView;
@@ -421,6 +433,7 @@ function PostCard({
   onDelete: () => void;
   onReview: () => void;
   onOpenReview: () => void;
+  onOpenPhoto: () => void;
 }) {
   const replyLabel = channel.owner
     ? p.replies === 0
@@ -432,6 +445,38 @@ function PostCard({
       ? `You replied${p.replies > 1 ? ` ${p.replies} times` : ""}`
       : "Reply privately";
   const canReply = channel.owner ? p.replies > 0 : !channel.closed;
+  const fileCard = p.file && (
+        <div className="mt-2 flex flex-col gap-2">
+          <div className="flex items-center gap-2.5 rounded-xl bg-pane/60 px-3 py-2.5">
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-primary">
+              <FileText size={19} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[14px] font-medium">{p.file!.name}</div>
+              <div className="text-[12px] text-muted-foreground">
+                {bytes(p.file!.size)}
+                {p.file!.status === "downloading" && " · Receiving…"}
+                {p.file!.status === "failed" && " · Didn't arrive intact"}
+              </div>
+            </div>
+            {!channel.owner && p.file!.status === "ready" && p.file!.review.state === "quarantined" && (
+              <Button size="sm" variant="primary" onClick={onReview} loading={reviewing}>
+                {reviewing ? "Opening safely…" : "Review safely"}
+              </Button>
+            )}
+            {!channel.owner && p.file!.review.state === "clean" && (
+              <Button size="sm" onClick={onOpenReview}>
+                Open clean copy
+              </Button>
+            )}
+          </div>
+          {!channel.owner && p.file!.status === "ready" && p.file!.review.state === "quarantined" && (
+            <p className="text-[12px] text-muted-foreground">Quarantined until reviewed. Safe review opens it in a sealed sandbox and rebuilds a clean copy.</p>
+          )}
+          {!channel.owner && p.file!.review.state === "failed" && <p className="text-[12.5px] text-destructive">{p.file!.review.reason}</p>}
+          {p.file!.caption && <div className="text-[length:var(--msg-size)] leading-relaxed break-words whitespace-pre-wrap"><Rich text={p.file!.caption} /></div>}
+        </div>
+  );
   return (
     <article data-pid={p.id} className={`group/post rounded-2xl px-4 pt-3.5 pb-2.5 transition-colors duration-150 ${open ? "bg-[color-mix(in_srgb,var(--primary)_9%,var(--muted))]" : "bg-muted"}`}>
       <div className="flex items-center gap-2">
@@ -443,36 +488,14 @@ function PostCard({
         </span>
       </div>
       {p.file ? (
-        <div className="mt-2 flex flex-col gap-2">
-          <div className="flex items-center gap-2.5 rounded-xl bg-pane/60 px-3 py-2.5">
-            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-primary">
-              <FileText size={19} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[14px] font-medium">{p.file.name}</div>
-              <div className="text-[12px] text-muted-foreground">
-                {bytes(p.file.size)}
-                {p.file.status === "downloading" && " · Receiving…"}
-                {p.file.status === "failed" && " · Didn't arrive intact"}
-              </div>
-            </div>
-            {!channel.owner && p.file.status === "ready" && p.file.review.state === "quarantined" && (
-              <Button size="sm" variant="primary" onClick={onReview} loading={reviewing}>
-                {reviewing ? "Opening safely…" : "Review safely"}
-              </Button>
-            )}
-            {!channel.owner && p.file.review.state === "clean" && (
-              <Button size="sm" onClick={onOpenReview}>
-                Open clean copy
-              </Button>
-            )}
+        isPhotoFile(p.file.mime) && (channel.owner || p.file.status === "ready") ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <InlinePhoto photoKey={`s:sblob/c/${channel.id}/${p.id}`} own={channel.owner} name={p.file.name} onOpen={onOpenPhoto} fallback={fileCard} />
+            {p.file.caption && <div className="text-[length:var(--msg-size)] leading-relaxed break-words whitespace-pre-wrap"><Rich text={p.file.caption} /></div>}
           </div>
-          {!channel.owner && p.file.status === "ready" && p.file.review.state === "quarantined" && (
-            <p className="text-[12px] text-muted-foreground">Quarantined until reviewed. Safe review opens it in a sealed sandbox and rebuilds a clean copy.</p>
-          )}
-          {!channel.owner && p.file.review.state === "failed" && <p className="text-[12.5px] text-destructive">{p.file.review.reason}</p>}
-          {p.file.caption && <div className="text-[length:var(--msg-size)] leading-relaxed break-words whitespace-pre-wrap"><Rich text={p.file.caption} /></div>}
-        </div>
+        ) : (
+          fileCard
+        )
       ) : (
         <div className="mt-2 text-[length:var(--msg-size)] leading-relaxed break-words whitespace-pre-wrap"><Rich text={p.body} /></div>
       )}

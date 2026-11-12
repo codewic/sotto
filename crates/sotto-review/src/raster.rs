@@ -145,6 +145,15 @@ pub fn encode_png(r: &Raster, max_width: usize) -> Result<Vec<u8>, ReviewError> 
     Ok(out)
 }
 
+/// Encode pixels as JPEG (for photo clean copies). Only ever called on pixels parsed here.
+pub fn encode_jpeg(r: &Raster, quality: u8) -> Result<Vec<u8>, ReviewError> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .encode(&r.rgb, r.width as u32, r.height as u32, image::ExtendedColorType::Rgb8)
+        .map_err(|_| ReviewError::Io)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
