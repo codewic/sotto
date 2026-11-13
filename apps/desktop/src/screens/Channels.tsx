@@ -11,8 +11,9 @@ import { Avatar, seedOf } from "../ui/Avatar";
 import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, bytes } from "../ui/bits";
 import { useToast } from "../ui/toast";
-import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
+import { Composer, type ComposerHandle, DraftLine, type SendAs, uploadFile } from "../ui/Composer";
 import { InlinePhoto, PhotoViewer, type ViewerItem, isPhotoFile } from "../ui/Photo";
+import { InlineVideo, type VideoItem, VideoViewer, VoicePlayer, isAudioFile, isVideoFile } from "../ui/Media";
 import { contactName } from "./ConversationDialogs";
 import { useNav } from "./Shell";
 import { useMyAvatar } from "./AvatarPicker";
@@ -134,10 +135,11 @@ export function ChannelThread({
   const list = useMemo(() => posts.data ?? [], [posts.data]);
   const owner = contacts.find((c) => c.id === channel.from);
   const ownerName = owner ? contactName(owner) : "the person who made it";
-  const { go } = useNav();
+  const { go, status } = useNav();
   const [dragging, setDragging] = useState(false);
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [watching, setWatching] = useState<VideoItem | null>(null);
   const photos: ViewerItem[] = useMemo(
     () =>
       list
@@ -172,8 +174,8 @@ export function ChannelThread({
     refresh();
   }
 
-  async function sendFile(file: File, caption: string, asPhoto: boolean) {
-    await uploadFile(`/api/channels/${channel.id}/files`, file, caption, asPhoto);
+  async function sendFile(file: File, caption: string, sendAs: SendAs) {
+    await uploadFile(`/api/channels/${channel.id}/files`, file, caption, sendAs);
     refresh();
   }
 
@@ -289,6 +291,7 @@ export function ChannelThread({
                         onReview={() => void review(p)}
                         onOpenReview={() => go("review", `s:sblob/c/${channel.id}/${p.id}`)}
                         onOpenPhoto={() => setViewing(`s:sblob/c/${channel.id}/${p.id}`)}
+                        onOpenVideo={() => setWatching({ key: `s:sblob/c/${channel.id}/${p.id}`, own: channel.owner, name: p.file?.name ?? "Video", who: channel.title, at: p.sent_at })}
                         onReplies={() => setPanel({ kind: "replies", post: p })}
                         onEdit={() => startEdit(p)}
                         onDelete={() => setDeleting(p)}
@@ -328,6 +331,7 @@ export function ChannelThread({
                       if (last) startEdit(last);
                     }}
                     schedule={{ kind: "h", target: channel.id }}
+                    risk={status.settings?.risk_mode}
                   />
                 </div>
               ) : channel.closed ? (
@@ -356,6 +360,7 @@ export function ChannelThread({
       )}
       {panel?.kind === "info" && <ChannelInfo channel={channel} contacts={contacts} ownerName={ownerName} floating={narrow} onClose={() => setPanel(null)} onGone={onGone} onOpenContact={onOpenContact} />}
       {openPost && <Replies channel={channel} post={openPost} contacts={contacts} ownerName={ownerName} floating={narrow} onClose={() => setPanel(null)} onOpenContact={onOpenContact} />}
+      {watching && <VideoViewer item={watching} onClose={() => setWatching(null)} />}
       {viewing && photos.some((x) => x.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((x) => x.key === viewing)} onClose={() => setViewing(null)} />}
       <Dialog open={!!deleting} onClose={() => setDeleting(null)} title="Delete this post for everyone?" description="It's removed from every follower's device, along with its replies.">
         <div className="flex justify-end gap-2">
@@ -423,6 +428,7 @@ function PostCard({
   onReview,
   onOpenReview,
   onOpenPhoto,
+  onOpenVideo,
 }: {
   p: ChannelPost;
   channel: ChannelView;
@@ -434,6 +440,7 @@ function PostCard({
   onReview: () => void;
   onOpenReview: () => void;
   onOpenPhoto: () => void;
+  onOpenVideo: () => void;
 }) {
   const replyLabel = channel.owner
     ? p.replies === 0
@@ -488,9 +495,11 @@ function PostCard({
         </span>
       </div>
       {p.file ? (
-        isPhotoFile(p.file.mime) && (channel.owner || p.file.status === "ready") ? (
+        (isPhotoFile(p.file.mime) || isVideoFile(p.file.mime) || isAudioFile(p.file.mime)) && (channel.owner || p.file.status === "ready") ? (
           <div className="mt-2 flex flex-col gap-2">
-            <InlinePhoto photoKey={`s:sblob/c/${channel.id}/${p.id}`} own={channel.owner} name={p.file.name} onOpen={onOpenPhoto} fallback={fileCard} />
+            {isPhotoFile(p.file.mime) && <InlinePhoto photoKey={`s:sblob/c/${channel.id}/${p.id}`} own={channel.owner} name={p.file.name} onOpen={onOpenPhoto} fallback={fileCard} />}
+            {isVideoFile(p.file.mime) && <InlineVideo mediaKey={`s:sblob/c/${channel.id}/${p.id}`} own={channel.owner} name={p.file.name} onOpen={onOpenVideo} fallback={fileCard} />}
+            {isAudioFile(p.file.mime) && <VoicePlayer mediaKey={`s:sblob/c/${channel.id}/${p.id}`} own={channel.owner} name={p.file.name} fallback={fileCard} />}
             {p.file.caption && <div className="text-[length:var(--msg-size)] leading-relaxed break-words whitespace-pre-wrap"><Rich text={p.file.caption} /></div>}
           </div>
         ) : (

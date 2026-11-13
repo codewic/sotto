@@ -71,6 +71,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .merge(crate::updates::routes())
         .merge(crate::scheduled::routes())
         .merge(crate::photos::routes())
+        .merge(crate::media::routes())
         .layer(DefaultBodyLimit::max(512 << 20))
         .layer(axum::middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent.clone());

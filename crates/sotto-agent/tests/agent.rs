@@ -933,6 +933,10 @@ async fn send_later_and_group_mentions() {
 
 /// Upload with extra headers (here, `x-send-as: photo`).
 async fn upload_as(r: &Router, path: &str, name: &str, mime: &str, bytes: &[u8], photo: bool) -> (StatusCode, Value) {
+    upload_send_as(r, path, name, mime, bytes, if photo { Some("photo") } else { None }).await
+}
+
+async fn upload_send_as(r: &Router, path: &str, name: &str, mime: &str, bytes: &[u8], send_as: Option<&str>) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .method("POST")
         .uri(path)
@@ -941,8 +945,8 @@ async fn upload_as(r: &Router, path: &str, name: &str, mime: &str, bytes: &[u8],
         .header(header::CONTENT_TYPE, mime)
         .header("x-file-name", name)
         .header("x-caption", "");
-    if photo {
-        req = req.header("x-send-as", "photo");
+    if let Some(a) = send_as {
+        req = req.header("x-send-as", a);
     }
     let res = r.clone().oneshot(req.body(Body::from(bytes.to_vec())).unwrap()).await.unwrap();
     let status = res.status();
@@ -1045,4 +1049,87 @@ async fn photos_are_cleaned_when_sent_and_when_received() {
     // Not an image at all, sent as a photo: refused with a reason, nothing sent.
     let (s, v) = upload_as(&ra, &format!("/api/contacts/{ben}/files"), "notes.jpg", "image/jpeg", b"plain text pretending", true).await;
     assert_ne!(s, StatusCode::OK, "{v}");
+}
+
+fn ffmpeg_file(args: &[&str], out: &std::path::Path) -> bool {
+    std::process::Command::new("ffmpeg").args(["-nostdin", "-v", "error", "-y"]).args(args).arg(out).status().map(|s| s.success()).unwrap_or(false)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_notes_and_videos_play_from_clean_copies() {
+    let render = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("sotto-render");
+    let tmp = tempfile::tempdir().unwrap();
+    let (voice, clip) = (tmp.path().join("voice.webm"), tmp.path().join("clip.mp4"));
+    if !render.exists()
+        || !sotto_review::sandbox::available()
+        || !ffmpeg_file(&["-f", "lavfi", "-i", "sine=frequency=330:duration=3", "-c:a", "libopus", "-f", "webm"], &voice)
+        || !ffmpeg_file(&["-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=2", "-f", "lavfi", "-i", "sine=duration=2", "-c:v", "libx264", "-c:a", "aac", "-shortest", "-metadata", "comment=Filmed at Apapa port"], &clip)
+    {
+        eprintln!("skipped: needs bubblewrap, ffmpeg and target/debug/sotto-render");
+        return;
+    }
+    // SAFETY: tests only ever set this to the same path.
+    unsafe { std::env::set_var("SOTTO_RENDER", &render) };
+    let has = |hay: &[u8], n: &[u8]| hay.windows(n.len()).any(|w| w == n);
+    let q = |k: &str| k.replace('/', "%2F").replace(':', "%3A");
+    let url = relay().await;
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ra = named_desk(da.path(), &url, "owner-passcode", "Ada").await;
+    let (b_agent, rb) = desk(db.path(), &url);
+    call(&rb, "POST", "/api/setup", Some(json!({ "passcode": "member-passcode" }))).await;
+    let ben = connect(&ra, &rb, "Ben").await;
+    let ada = call(&rb, "GET", "/api/contacts", None).await.1[0]["id"].as_str().unwrap().to_string();
+    let arrived = |id: String| {
+        let rb = rb.clone();
+        let ada = ada.clone();
+        async move {
+            until("it arrives", || async { call(&rb, "GET", &format!("/api/contacts/{ada}/messages"), None).await.1.as_array().unwrap().iter().any(|m| m["id"] == id.as_str() && m["file"]["status"] == "ready") }).await;
+        }
+    };
+
+    // A voice note: Ben hears a fresh AAC copy rebuilt from its samples, with a waveform.
+    let (s, v) = upload_as(&ra, &format!("/api/contacts/{ben}/files"), "Voice note.webm", "audio/webm", &std::fs::read(&voice).unwrap(), false).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let vid = v["id"].as_str().unwrap().to_string();
+    arrived(vid.clone()).await;
+    let vkey = format!("m:file/{vid}");
+    let (_, a) = call(&rb, "POST", "/api/media/prepare", Some(json!({ "key": vkey, "kind": "audio" }))).await;
+    assert!(a["state"] == "ready" && a["playable"] == true && a["peaks"].as_array().unwrap().len() == 64, "{a}");
+    assert!((a["duration"].as_f64().unwrap() - 3.0).abs() < 0.3, "{a}");
+    let (s, bytes) = get_bytes(&rb, &format!("/api/media/play?key={}", q(&vkey))).await;
+    assert!(s == StatusCode::OK && &bytes[4..8] == b"ftyp");
+
+    // A video sent as a video: its tags never leave Ada's desk.
+    let (s, sent) = upload_send_as(&ra, &format!("/api/contacts/{ben}/files"), "clip.mov", "video/quicktime", &std::fs::read(&clip).unwrap(), Some("video")).await;
+    assert_eq!(s, StatusCode::OK, "{sent}");
+    assert_eq!(sent["file"]["name"], "clip.mp4");
+    let cid = sent["id"].as_str().unwrap().to_string();
+    let ckey = format!("m:file/{cid}");
+    let (_, own) = call(&ra, "POST", "/api/media/prepare", Some(json!({ "key": ckey, "kind": "video", "own": true }))).await;
+    assert!(own["state"] == "ready" && own["playable"] == true, "your own video plays from the file: {own}");
+    let (_, own_bytes) = get_bytes(&ra, &format!("/api/media/play?key={}", q(&ckey))).await;
+    assert!(!has(&own_bytes, b"Apapa"), "the tag was sent");
+
+    // Ben: the poster first, the playable copy when he presses play.
+    arrived(cid.clone()).await;
+    let (_, p) = call(&rb, "POST", "/api/media/prepare", Some(json!({ "key": ckey, "kind": "video" }))).await;
+    assert!(p["state"] == "ready" && p["playable"] == false && p["width"] == 320 && p["height"] == 240, "{p}");
+    let (s, poster) = get_bytes(&rb, &format!("/api/media/poster?key={}", q(&ckey))).await;
+    assert!(s == StatusCode::OK && poster.starts_with(&[0xFF, 0xD8]));
+    let (s, _) = get_bytes(&rb, &format!("/api/media/play?key={}", q(&ckey))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "not playable until asked");
+    let (_, p) = call(&rb, "POST", "/api/media/prepare", Some(json!({ "key": ckey, "kind": "video", "play": true }))).await;
+    assert_eq!(p["playable"], true, "{p}");
+    let (_, play) = get_bytes(&rb, &format!("/api/media/play?key={}", q(&ckey))).await;
+    assert!(&play[4..8] == b"ftyp" && !has(&play, b"Apapa"));
+
+    // Deleting the messages takes the clean copies with them.
+    for id in [&vid, &cid] {
+        call(&rb, "DELETE", &format!("/api/contacts/{ada}/messages/{id}"), None).await;
+    }
+    sotto_agent::photos::sweep(&b_agent.session().await.unwrap());
+    let (s, _) = get_bytes(&rb, &format!("/api/media/play?key={}", q(&vkey))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = get_bytes(&rb, &format!("/api/media/poster?key={}", q(&ckey))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }

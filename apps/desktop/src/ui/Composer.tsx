@@ -1,11 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bold, Check, Clock, Code, FileText, Italic, Paperclip, Quote, SendHorizontal, Smile, SquareCode, X } from "lucide-react";
+import { Bold, Check, Clock, Code, FileText, Italic, Mic, Paperclip, Quote, SendHorizontal, Smile, SquareCode, X } from "lucide-react";
 import { type ReactNode, type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type ApiError, api, del, get, post } from "../api";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./Button";
 import { Segmented, bytes } from "./bits";
 import { isPhotoFile } from "./Photo";
+import { isVideoFile } from "./Media";
+import { RecordingRow, ReviewRow, useVoiceRecorder } from "./VoiceRecorder";
+import type { RiskMode } from "../types";
 import { EMOJI, type Emoji, findEmoji } from "./emoji";
 import { plain } from "./Rich";
 import { useToast } from "./toast";
@@ -48,14 +51,17 @@ export function DraftLine({ draftKey, off = false, children }: { draftKey: strin
 }
 
 /** Upload one file to a conversation, group or channel's `/files` endpoint. */
-export function uploadFile(path: string, file: File, caption: string, asPhoto = false) {
+/** How a file should be sent: cleaned first as a photo or a video, or exactly as it is. */
+export type SendAs = "photo" | "video" | null;
+
+export function uploadFile(path: string, file: File, caption: string, sendAs: SendAs = null) {
   return file.arrayBuffer().then((buf) =>
     api("POST", path, new Uint8Array(buf), {
       "content-type": file.type || "application/octet-stream",
       "x-file-name": encodeURIComponent(file.name),
       "x-caption": encodeURIComponent(caption),
       // The agent cleans it in the sandbox first: no location, camera details or times.
-      ...(asPhoto ? { "x-send-as": "photo" } : {}),
+      ...(sendAs ? { "x-send-as": sendAs } : {}),
     }),
   );
 }
@@ -89,6 +95,7 @@ export function Composer({
   schedule,
   autoFocus,
   handle,
+  risk,
 }: {
   draftKey: string;
   placeholder: string;
@@ -97,8 +104,10 @@ export function Composer({
   editing?: boolean;
   /** Send (or save the edit of) a text message; throw to keep the text. */
   onSendText: (text: string) => Promise<unknown>;
-  /** Send one file; the caption goes with the first file of a set. `asPhoto`: clean it first. */
-  onSendFile?: (file: File, caption: string, asPhoto: boolean) => Promise<unknown>;
+  /** Send one file; the caption goes with the first file of a set. `sendAs`: clean it first. */
+  onSendFile?: (file: File, caption: string, sendAs: SendAs) => Promise<unknown>;
+  /** For the note about voices before recording in High and Extreme risk modes. */
+  risk?: RiskMode;
   onArrowUpEmpty?: () => void;
   onEscape?: () => void;
   allowFiles?: boolean;
@@ -126,6 +135,20 @@ export function Composer({
   const [asPhoto, setAsPhoto] = useState(true);
   const [progress, setProgress] = useState<number | null>(null);
   const canAttach = allowFiles && !!onSendFile;
+  const canRecord = canAttach && typeof MediaRecorder !== "undefined";
+  const voice = useVoiceRecorder(risk);
+  async function sendVoice(file: File) {
+    if (!onSendFile) return;
+    setSending(true);
+    try {
+      await onSendFile(file, "", null);
+      voice.clear();
+    } catch (e) {
+      toast("error", (e as ApiError).message);
+    } finally {
+      setSending(false);
+    }
+  }
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -265,7 +288,8 @@ export function Composer({
       if (files.length && onSendFile) {
         for (; sent < files.length; sent++) {
           setProgress(sent);
-          await onSendFile(files[sent], sent === 0 ? body : "", asPhoto && isPhotoFile(files[sent].type));
+          const t = files[sent].type;
+          await onSendFile(files[sent], sent === 0 ? body : "", !asPhoto ? null : isPhotoFile(t) ? "photo" : isVideoFile(t) ? "video" : null);
         }
       } else {
         await onSendText(body);
@@ -435,6 +459,11 @@ export function Composer({
             </Fmt>
           </div>
         )}
+        {voice.state.phase === "recording" ? (
+          <RecordingRow elapsed={voice.state.elapsed} levels={voice.state.levels} onStop={() => voice.stop(true)} onDiscard={voice.discard} />
+        ) : voice.state.phase === "review" ? (
+          <ReviewRow url={voice.state.url} duration={voice.state.duration} sending={sending} onSend={() => voice.state.phase === "review" && void sendVoice(voice.state.file)} onDiscard={voice.discard} />
+        ) : (
         <div className="flex items-end gap-1 p-2">
           {canAttach && !editing && (
             <>
@@ -543,16 +572,31 @@ export function Composer({
               <Clock size={17} />
             </IconButton>
           )}
-          <button
-            type="submit"
-            disabled={sending || (!text.trim() && !files.length)}
-            aria-label={editing ? "Save edit" : "Send"}
-            className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
-          </button>
+          {canRecord && !editing && !text.trim() && !files.length ? (
+            <button
+              type="button"
+              onClick={voice.start}
+              disabled={sending}
+              aria-label="Record a voice note"
+              title="Record a voice note"
+              className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Mic size={17} />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={sending || (!text.trim() && !files.length)}
+              aria-label={editing ? "Save edit" : "Send"}
+              className="press grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
+            </button>
+          )}
         </div>
+        )}
       </form>
+      {voice.dialog}
     </div>
   );
 }
@@ -569,6 +613,9 @@ function Fmt({ label, onClick, children }: { label: string; onClick: () => void;
 /** Files waiting to go, with a thumbnail for images (drawn from your own file, here). */
 function Tray({ files, onRemove, asPhoto, setAsPhoto, progress }: { files: File[]; onRemove: (i: number) => void; asPhoto: boolean; setAsPhoto: (v: boolean) => void; progress: number | null }) {
   const photos = files.filter((f) => isPhotoFile(f.type)).length;
+  const videos = files.filter((f) => isVideoFile(f.type)).length;
+  const media = photos + videos;
+  const noun = photos && videos ? "Photos and videos" : videos ? (videos === 1 ? "Video" : "Videos") : photos === 1 ? "Photo" : "Photos";
   // Made and released in the same effect, so a re-run never leaves the tray with dead links.
   const [urls, setUrls] = useState<(string | null)[]>([]);
   useEffect(() => {
@@ -605,19 +652,19 @@ function Tray({ files, onRemove, asPhoto, setAsPhoto, progress }: { files: File[
           </div>
         ))}
       </div>
-      {photos > 0 && (
+      {media > 0 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1.5">
           <Segmented
-            label={photos === 1 ? "Send the photo as" : "Send the photos as"}
+            label={`Send ${noun.toLowerCase()} as`}
             value={asPhoto ? "photo" : "file"}
             onChange={(v) => setAsPhoto(v === "photo")}
             options={[
-              { value: "photo", label: photos === 1 ? "Photo" : "Photos" },
+              { value: "photo", label: noun },
               { value: "file", label: "Original file" },
             ]}
           />
           <span className="text-[11.5px] text-muted-foreground">
-            {asPhoto ? "Location and camera details removed, resized if very large" : "Exact bytes, details and all"}
+            {asPhoto ? (videos && !photos ? "Location and camera details removed" : "Location and camera details removed, photos resized if very large") : "Exact bytes, details and all"}
           </span>
         </div>
       )}

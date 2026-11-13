@@ -78,6 +78,8 @@ function request(method, urlPath, body, headers = {}) {
           ...(payload ? { "content-type": isBytes ? headers["content-type"] || "application/octet-stream" : "application/json", "content-length": payload.length } : {}),
           ...(headers["x-file-name"] ? { "x-file-name": headers["x-file-name"] } : {}),
           ...(headers["x-caption"] ? { "x-caption": headers["x-caption"] } : {}),
+          // "photo" or "video": the agent cleans the file before sending it.
+          ...(headers["x-send-as"] === "photo" || headers["x-send-as"] === "video" ? { "x-send-as": headers["x-send-as"] } : {}),
         },
       },
       (res) => {
@@ -86,7 +88,7 @@ function request(method, urlPath, body, headers = {}) {
         res.on("end", () => {
           const buf = Buffer.concat(chunks);
           const type = res.headers["content-type"] || "";
-          if (type.startsWith("image/")) return resolve({ status: res.statusCode, bytes: new Uint8Array(buf), type });
+          if (type.startsWith("image/") || type.startsWith("audio/") || type.startsWith("video/")) return resolve({ status: res.statusCode, bytes: new Uint8Array(buf), type });
           let parsed = null;
           try {
             parsed = buf.length ? JSON.parse(buf.toString("utf8")) : null;
@@ -319,7 +321,12 @@ function setMenu() {
 app.whenReady().then(async () => {
   setMenu();
   // Deny every browser permission request.
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  // The main window may use the microphone for voice notes: audio only, and nothing else.
+  session.defaultSession.setPermissionRequestHandler((_wc, perm, cb, details) => {
+    const audioOnly = Array.isArray(details.mediaTypes) && details.mediaTypes.length > 0 && details.mediaTypes.every((t) => t === "audio");
+    cb(perm === "media" && audioOnly);
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === "media");
   // The renderer may only load its own files: nothing on the network.
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
     cb({ cancel: !details.url.startsWith("file://") && !details.url.startsWith("devtools://") });

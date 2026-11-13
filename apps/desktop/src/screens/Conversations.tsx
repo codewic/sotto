@@ -40,6 +40,7 @@ import { SecretCard, SendSecretDialog, secretItem } from "./Secrets";
 import { Chip, Empty, Kbd, Notice, Skeleton, Switch, bytes, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
 import { Album, InlinePhoto, PhotoViewer, type ViewerItem, isPhotoFile, withAlbums } from "../ui/Photo";
+import { InlineVideo, type VideoItem, VideoViewer, VoicePlayer, isAudioFile, isVideoFile } from "../ui/Media";
 import { Composer, type ComposerHandle, DraftLine, uploadFile } from "../ui/Composer";
 import { AcceptDialog, DeleteDialog, InviteDialog, RenameDialog, SafetyDialog, contactName as name } from "./ConversationDialogs";
 import { useCalls } from "./Calls";
@@ -474,6 +475,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
   const secrets = useQuery({ queryKey: ["secrets", contact.id], queryFn: () => get<SecretView[]>(`/api/contacts/${contact.id}/secrets`) });
   const [sendingSecret, setSendingSecret] = useState(false);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [watching, setWatching] = useState<VideoItem | null>(null);
   // Every photo in the conversation, oldest first, for the viewer's next and previous.
   const photos: ViewerItem[] = useMemo(
     () =>
@@ -721,6 +723,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                           reviewing={reviewing === m.id}
                           photoKey={`m:file/${m.id}`}
                           onOpenPhoto={() => setViewing(`m:file/${m.id}`)}
+                          onOpenVideo={() => setWatching({ key: `m:file/${m.id}`, own: m.outgoing, name: m.file?.name ?? "Video", who: m.outgoing ? "You" : name(contact), at: m.received_at })}
                           onReply={() => {
                             setEditing(null);
                             setReplyTo(m);
@@ -806,6 +809,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                 ...(calls.calls.some((c) => c.phase !== "ended") ? [] : [{ name: "call", hint: `Call ${name(contact)}`, run: () => void calls.call(contact) }]),
               ]}
               schedule={{ kind: "c", target: contact.id }}
+              risk={status.settings?.risk_mode}
             />
           ) : (
             <Notice>Waiting for {name(contact)} to accept your invite. Send them the link or show the QR code again from the invite you created.</Notice>
@@ -822,6 +826,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
           </div>
         )}
       </div>
+      {watching && <VideoViewer item={watching} onClose={() => setWatching(null)} />}
       {viewing && photos.some((p) => p.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((p) => p.key === viewing)} onClose={() => setViewing(null)} />}
       <SendSecretDialog open={sendingSecret} contactId={contact.id} name={name(contact)} onClose={() => setSendingSecret(false)} />
       {info && (
@@ -1014,6 +1019,7 @@ export function Bubble(props: {
   /** Where this message's photo lives (a review key), when its file is a photo. */
   photoKey?: string;
   onOpenPhoto?: () => void;
+  onOpenVideo?: () => void;
   m: Message;
   first: boolean;
   last: boolean;
@@ -1041,6 +1047,10 @@ export function Bubble(props: {
     );
   }
   const mine = m.outgoing;
+  // Photos, videos and audio show as themselves once the file is here (or is yours).
+  const shown = m.kind === "file" && !!m.file && !!props.photoKey && (mine || m.file.status === "ready");
+  const mime = m.file?.mime ?? "";
+  const mediaKind = !shown ? null : isPhotoFile(mime) ? "photo" : isVideoFile(mime) ? "video" : isAudioFile(mime) ? "audio" : null;
   const corner = mine ? (last ? "rounded-2xl rounded-br-md" : first ? "rounded-2xl rounded-br-md" : "rounded-2xl rounded-r-md") : last ? "rounded-2xl rounded-bl-md" : first ? "rounded-2xl rounded-bl-md" : "rounded-2xl rounded-l-md";
   const time = new Date(m.received_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const meta = (
@@ -1081,13 +1091,15 @@ export function Bubble(props: {
             </span>
           </div>
         )}
-        {m.kind === "file" && m.file && props.photoKey && isPhotoFile(m.file.mime) && (mine || m.file.status === "ready") && (
+        {mediaKind && m.file && props.photoKey && (
           <div className="flex flex-col gap-2 pt-0.5 pb-4">
-            <InlinePhoto photoKey={props.photoKey} own={mine} name={m.file.name} onOpen={() => props.onOpenPhoto?.()} fallback={<FileCard {...props} />} />
+            {mediaKind === "photo" && <InlinePhoto photoKey={props.photoKey} own={mine} name={m.file.name} onOpen={() => props.onOpenPhoto?.()} fallback={<FileCard {...props} />} />}
+            {mediaKind === "video" && <InlineVideo mediaKey={props.photoKey} own={mine} name={m.file.name} onOpen={() => props.onOpenVideo?.()} fallback={<FileCard {...props} />} />}
+            {mediaKind === "audio" && <VoicePlayer mediaKey={props.photoKey} own={mine} name={m.file.name} fallback={<FileCard {...props} />} />}
             {m.file.caption && <div className="max-w-[320px] whitespace-pre-wrap"><Rich text={m.file.caption} mentions={props.mentions} /></div>}
           </div>
         )}
-        {m.kind === "file" && m.file && !(props.photoKey && isPhotoFile(m.file.mime) && (mine || m.file.status === "ready")) && <FileCard {...props} />}
+        {m.kind === "file" && m.file && !mediaKind && <FileCard {...props} />}
         <span className={`absolute right-2.5 bottom-1.5 flex items-center gap-1 text-[11px] tabular ${mine ? "text-[var(--bubble-mine-muted)]" : "text-muted-foreground"}`}>
           {meta}
         </span>

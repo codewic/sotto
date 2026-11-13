@@ -50,7 +50,7 @@ fn img_key(key: &str) -> String {
 
 /// Which store and blob a review or photo key points at: `m:file/<mid>` (a 1:1 message),
 /// `s:sblob/...` (a group or channel file) or `d:<blob>` (the anonymous inbox).
-fn source<'a>(s: &'a Session, key: &str) -> Option<(&'a Arc<Store>, String, bool)> {
+pub(crate) fn source<'a>(s: &'a Session, key: &str) -> Option<(&'a Arc<Store>, String, bool)> {
     let (kind, blob) = key.split_once(':')?;
     if blob.is_empty() || blob.contains("..") {
         return None;
@@ -89,8 +89,15 @@ async fn clean_from(write_input: impl FnOnce(&mut std::fs::File) -> Result<(), A
 /// The upload routes call this: when the app asked to send as a photo (`x-send-as: photo`),
 /// the clean copy is what gets sent, named for its new format.
 pub async fn maybe_clean(headers: &HeaderMap, name: String, mime: String, body: Bytes) -> Result<(String, String, Bytes), ApiError> {
-    if headers.get("x-send-as").and_then(|v| v.to_str().ok()) != Some("photo") {
-        return Ok((name, mime, body));
+    let stem = |name: &str| std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.trim().is_empty());
+    match headers.get("x-send-as").and_then(|v| v.to_str().ok()) {
+        Some("photo") => {}
+        Some("video") => {
+            let (bytes, ext) = crate::media::clean_video(&body, &mime).await?;
+            let mime = if ext == "mp4" { "video/mp4".to_string() } else if ext == "webm" { "video/webm".into() } else { "video/x-matroska".into() };
+            return Ok((format!("{}.{ext}", stem(&name).unwrap_or_else(|| "video".into())), mime, Bytes::from(bytes)));
+        }
+        _ => return Ok((name, mime, body)),
     }
     let _job = JOBS.lock().await;
     let p = clean_from(|f| {
@@ -98,7 +105,7 @@ pub async fn maybe_clean(headers: &HeaderMap, name: String, mime: String, body: 
         f.write_all(&body).map_err(|_| ApiError::Internal)
     })
     .await?;
-    let stem = std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "photo".into());
+    let stem = stem(&name).unwrap_or_else(|| "photo".into());
     let ext = if p.mime == "image/png" { "png" } else { "jpg" };
     Ok((format!("{stem}.{ext}"), p.mime.to_string(), Bytes::from(p.bytes)))
 }
@@ -255,6 +262,7 @@ pub fn start(s: &Arc<Session>) {
 }
 
 pub fn sweep(s: &Session) {
+    crate::media::sweep(s);
     for name in s.reviews.names("photo/") {
         let key = &name["photo/".len()..];
         if source(s, key).is_some_and(|(store, blob, _)| !store.has_blob(&blob)) {

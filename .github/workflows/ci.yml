@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Sandbox and document tools for safe-review tests
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap poppler-utils libreoffice-writer-nogui
+      - name: Sandbox, document and media tools for safe-review tests
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap poppler-utils libreoffice-writer-nogui ffmpeg
       - name: Allow unprivileged user namespaces for bubblewrap
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: dtolnay/rust-toolchain@master

@@ -76,7 +76,8 @@
     },
     "deb": {
       "depends": [
-        "bubblewrap"
+        "bubblewrap",
+        "ffmpeg"
       ],
       "recommends": [
         "poppler-utils",

@@ -703,9 +703,17 @@ button:hover .broadcast-glyph .wave-2 {
 @keyframes viewer-in {
   from { opacity: 0; }
 }
+/* Recording: the red dot breathes, so it's clear the microphone is on. */
+.rec-dot {
+  animation: rec-dot 1.2s ease-in-out infinite;
+}
+@keyframes rec-dot {
+  50% { opacity: 0.35; }
+}
 @media (prefers-reduced-motion: reduce) {
   .photo-wait,
-  .viewer-in {
+  .viewer-in,
+  .rec-dot {
     animation: none;
   }
 }

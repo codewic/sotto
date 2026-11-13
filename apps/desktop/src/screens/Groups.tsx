@@ -11,8 +11,9 @@ import { Avatar, seedOf } from "../ui/Avatar";
 import { SearchBar, useThreadSearch } from "../ui/ThreadSearch";
 import { Notice, Skeleton, Switch, ttlLabel } from "../ui/bits";
 import { useToast } from "../ui/toast";
-import { Composer, type ComposerHandle, DraftLine, type Member, uploadFile } from "../ui/Composer";
+import { Composer, type ComposerHandle, DraftLine, type Member, type SendAs, uploadFile } from "../ui/Composer";
 import { Album, PhotoViewer, type ViewerItem, isPhotoFile, withAlbums } from "../ui/Photo";
+import { type VideoItem, VideoViewer } from "../ui/Media";
 import { useCalls } from "./Calls";
 import { contactName } from "./ConversationDialogs";
 import { AlbumMeta, Bubble, ContextMenu, MenuItem } from "./Conversations";
@@ -124,7 +125,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   const list = useMemo(() => messages.data ?? [], [messages.data]);
   const byId = useMemo(() => new Map(list.map((m) => [m.id, m])), [list]);
   const days = useMemo(() => arrange(list), [list]);
-  const { go } = useNav();
+  const { go, status } = useNav();
   const manager = !group.removed && (group.owner || group.am_admin);
   const [menu, setMenu] = useState<{ m: Message; x: number; y: number } | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
@@ -166,8 +167,8 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
     refresh();
   }
 
-  async function sendFile(file: File, caption: string, asPhoto: boolean) {
-    await uploadFile(`/api/groups/${group.id}/files`, file, caption, asPhoto);
+  async function sendFile(file: File, caption: string, sendAs: SendAs) {
+    await uploadFile(`/api/groups/${group.id}/files`, file, caption, sendAs);
     setReplyTo(null);
     refresh();
   }
@@ -225,6 +226,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
   );
   const callBusy = calls.calls.some((c) => c.phase !== "ended");
   const [viewing, setViewing] = useState<string | null>(null);
+  const [watching, setWatching] = useState<VideoItem | null>(null);
   const photos: ViewerItem[] = useMemo(
     () =>
       list
@@ -354,6 +356,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                           replyName={(r) => (r.outgoing ? "You" : (r.author ?? "Someone"))}
                           photoKey={`s:sblob/g/${group.id}/${m.id}`}
                           onOpenPhoto={() => setViewing(`s:sblob/g/${group.id}/${m.id}`)}
+                          onOpenVideo={() => setWatching({ key: `s:sblob/g/${group.id}/${m.id}`, own: m.outgoing, name: m.file?.name ?? "Video", who: m.outgoing ? "You" : (m.author ?? "Someone"), at: m.received_at })}
                           mentions={mentionNames}
                           flash={flash === m.id || search.current === m.id}
                           reviewing={reviewing === m.id}
@@ -424,6 +427,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
               members={mentionable}
               commands={callable.length && !callBusy ? [{ name: "call", hint: "Call everyone you can reach in this group", run: () => void calls.call(callable[0], callable.slice(1)) }] : []}
               schedule={{ kind: "g", target: group.id }}
+              risk={status.settings?.risk_mode}
             />
           )}
         </div>
@@ -439,6 +443,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
         )}
       {info && <GroupInfo group={group} contacts={contacts} floating={narrow} onClose={() => setInfo(false)} onGone={onGone} />}
       {viewing && photos.some((p) => p.key === viewing) && <PhotoViewer items={photos} start={photos.findIndex((p) => p.key === viewing)} onClose={() => setViewing(null)} />}
+      {watching && <VideoViewer item={watching} onClose={() => setWatching(null)} />}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           {!group.removed && (

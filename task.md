@@ -25,7 +25,10 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 - [x] Clean photo copies and Safe review results are swept once their message is gone (deleted or expired)
 - [x] List previews say "Photo"
 - [ ] Blurred placeholder from the sender's preview (needs a new message type)
-- [ ] Video and audio (preview frame and playback via the sandbox), voice notes
+- [x] Voice notes: record in the message box (mic when it's empty; a note about voices in High risk, a confirm in Extreme), listen before sending; received ones play from a copy rebuilt from samples in the sandbox, with a waveform and 1x, 1.5x, 2x speed; test `voice_notes_and_videos_play_from_clean_copies`
+- [x] Videos: send as a video (same streams, location and camera tags removed) or as the file; received ones show a clean poster frame, and pressing play makes a copy from raw frames that left the sandbox (H.264, at most 1280 px and 10 minutes); your own play directly
+- [x] ffmpeg runs only inside the sandbox on what you receive; the .deb depends on it, CI installs it
+- [x] Fixed: the desktop shell forwarded no "send as" header, so photos would have gone out uncleaned in the app (the browser preview didn't use that path)
 - [ ] Forward a photo; Media, Files, Voice and Links tabs in the info panel
 
 ## Calls

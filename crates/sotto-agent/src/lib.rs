@@ -10,6 +10,7 @@ pub mod cases;
 pub mod channels;
 pub mod drops;
 pub mod groups;
+pub mod media;
 pub mod photos;
 pub mod hooks;
 pub mod review;

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyze;
+pub mod media;
 pub mod pdf;
 pub mod raster;
 pub mod sandbox;
@@ -136,9 +137,15 @@ pub fn photo(input: &Path, work: &Path, render: &Path, timeout: Duration) -> Res
     let raw = work.join("raw");
     fs::create_dir_all(&raw).map_err(|_| ReviewError::Io)?;
     sandbox::run_mode(render, input, &raw, timeout, Some("photo"))?;
+    let photo = photo_from(&raw);
+    let _ = fs::remove_dir_all(&raw);
+    photo
+}
+
+/// The clean copy from a renderer output folder holding `photo.ppm` and `info.txt`.
+pub(crate) fn photo_from(raw: &Path) -> Result<Photo, ReviewError> {
     let lossless = read_capped(&raw.join("info.txt"), 1024).trim() == "Format: png";
     let data = read_untrusted(&raw.join("photo.ppm"), PHOTO_MAX * PHOTO_MAX * 3 + 64).ok_or_else(|| ReviewError::Render("unexpected output from the renderer".into()))?;
-    let _ = fs::remove_dir_all(&raw);
     let r = raster::parse_ppm(&data)?;
     drop(data);
     if r.width.max(r.height) > PHOTO_MAX {

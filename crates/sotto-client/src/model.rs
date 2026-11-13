@@ -276,11 +276,11 @@ pub struct ReactionView {
 
 impl Message {
     /// One line for chat-list previews.
+    /// (Photos, videos and audio say what they are; other files give their name.)
     pub fn preview(&self) -> String {
         let t = match &self.body {
             Body::Text(t) | Body::System(t) => t.clone(),
-            Body::File { meta, .. } if meta.mime.starts_with("image/") => "Photo".to_string(),
-            Body::File { meta, .. } => format!("File: {}", meta.name),
+            Body::File { meta, .. } => media_word(&meta.mime, &meta.name).map(String::from).unwrap_or_else(|| format!("File: {}", meta.name)),
         };
         t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()
     }
@@ -330,5 +330,18 @@ impl Message {
             edited: self.edited,
             read: self.read,
         }
+    }
+}
+
+/// What a list preview calls a file of this type: "Photo", "Video", "Voice note" or "Audio".
+pub fn media_word(mime: &str, name: &str) -> Option<&'static str> {
+    if mime.starts_with("image/") {
+        Some("Photo")
+    } else if mime.starts_with("video/") {
+        Some("Video")
+    } else if mime.starts_with("audio/") {
+        Some(if name.to_lowercase().starts_with("voice note") { "Voice note" } else { "Audio" })
+    } else {
+        None
     }
 }

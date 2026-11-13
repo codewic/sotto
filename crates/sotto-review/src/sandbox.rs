@@ -112,7 +112,7 @@ pub fn run_mode(render: &Path, input: &Path, out: &Path, timeout: Duration, mode
     let status = std::fs::read_to_string(out.join("status.txt")).unwrap_or_default();
     let status: String = status.chars().filter(|c| !c.is_control()).take(200).collect();
     match status.strip_prefix("ok ") {
-        Some(kind) if ["pdf", "image", "office", "text", "photo"].contains(&kind) => Ok(kind.to_string()),
+        Some(kind) if ["pdf", "image", "office", "text", "photo", "probe", "audio", "poster", "video", "remux"].contains(&kind) => Ok(kind.to_string()),
         _ => Err(ReviewError::Render(status.strip_prefix("error ").unwrap_or("the file could not be opened safely").to_string())),
     }
 }

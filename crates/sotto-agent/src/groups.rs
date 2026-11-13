@@ -383,7 +383,7 @@ pub async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u6
                     if find_msg(s, &g.id, &id).is_none() {
                         let author: String = if name.trim().is_empty() { credential } else { name }.chars().take(60).collect();
                         let caption: String = caption.chars().take(2000).collect();
-                        let file_name = if file.mime.starts_with("image/") { "Photo".to_string() } else { file.name.clone() };
+                        let file_name = sotto_client::media_word(&file.mime, &file.name).map(String::from).unwrap_or_else(|| file.name.clone());
                         crate::shared::receive(agent, s, &file_at(&g.id, &id), *file, json!({ "type": "group", "id": hex(&g.id) }))?;
                         let m = Stored {
                             id,
@@ -1208,7 +1208,7 @@ async fn send_file(State(agent): A, Path(id): Path<String>, headers: HeaderMap, 
         edited: false,
     };
     put_msg(&s, &g.id, &m)?;
-    g.preview = if mime.starts_with("image/") { "You: Photo".to_string() } else { format!("You: {}", f.name) };
+    g.preview = format!("You: {}", sotto_client::media_word(&mime, &f.name).unwrap_or(&f.name));
     g.preview_at = time::now();
     g.last_activity = time::now();
     save(&s, &g)?;

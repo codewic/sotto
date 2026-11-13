@@ -207,3 +207,70 @@ fn screenshots_stay_png_and_huge_photos_shrink() {
     std::fs::write(&input, b"%PDF-1.4 not a photo").unwrap();
     assert!(sotto_review::photo(&input, &dir.path().join("work2"), &render, std::time::Duration::from_secs(60)).is_err());
 }
+
+fn have_ffmpeg() -> bool {
+    std::process::Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// Make a test file with the system ffmpeg (outside any sandbox: these inputs are ours).
+fn make(args: &[&str], out: &std::path::Path) {
+    let ok = std::process::Command::new("ffmpeg").args(["-nostdin", "-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+    assert!(ok, "couldn't make {}", out.display());
+}
+
+#[test]
+fn voice_notes_come_back_as_fresh_audio_with_a_waveform() {
+    if !have_ffmpeg() {
+        eprintln!("skipped: needs ffmpeg");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("voice.webm");
+    make(&["-f", "lavfi", "-i", "sine=frequency=330:duration=3", "-c:a", "libopus", "-metadata", "title=Recorded at Apapa", "-f", "webm"], &input);
+    let render = PathBuf::from(env!("CARGO_BIN_EXE_sotto-render"));
+    let a = sotto_review::media::audio(&input, &dir.path().join("work"), &render, std::time::Duration::from_secs(60)).expect("audio");
+    assert!((a.duration - 3.0).abs() < 0.3, "duration {}", a.duration);
+    assert_eq!(a.peaks.len(), 64);
+    assert!(a.peaks.iter().filter(|&&p| p > 200).count() > 50, "a steady tone fills the waveform: {:?}", a.peaks);
+    assert_eq!(&a.bytes[4..8], b"ftyp", "an MP4 audio file");
+    assert!(!a.bytes.windows(5).any(|w| w == b"Apapa"), "the title tag survived");
+}
+
+#[test]
+fn videos_get_a_clean_poster_a_playable_copy_and_tags_removed_for_sending() {
+    if !have_ffmpeg() {
+        eprintln!("skipped: needs ffmpeg");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("clip.mp4");
+    make(
+        &[
+            "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=2", "-f", "lavfi", "-i", "sine=duration=2", "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "-metadata", "comment=Filmed at Apapa port", "-metadata", "location=+06.4474+003.3640/",
+        ],
+        &input,
+    );
+    let render = PathBuf::from(env!("CARGO_BIN_EXE_sotto-render"));
+    let t = std::time::Duration::from_secs(120);
+    let p = sotto_review::media::probe(&input, &dir.path().join("w1"), &render, t).expect("probe");
+    assert!(p.has_video && p.has_audio && p.width == 640 && p.height == 360, "{p:?}");
+    assert!((p.duration - 2.0).abs() < 0.3);
+
+    let poster = sotto_review::media::poster(&input, &dir.path().join("w2"), &render, t).expect("poster");
+    assert_eq!((poster.width, poster.height, poster.mime), (640, 360, "image/jpeg"));
+
+    let play = sotto_review::media::video(&input, &dir.path().join("w3"), &render, &p, t).expect("video");
+    assert_eq!(&play[4..8], b"ftyp");
+    let has = |hay: &[u8], n: &[u8]| hay.windows(n.len()).any(|w| w == n);
+    assert!(!has(&play, b"Apapa") && !has(&play, b"6.4474"), "tags reached the playable copy");
+    // It really plays: about two seconds of picture at 640 x 360.
+    let path = dir.path().join("play.mp4");
+    std::fs::write(&path, &play).unwrap();
+    let probe = std::process::Command::new("ffprobe").args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0"]).arg(&path).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&probe.stdout).trim(), "640,360");
+
+    let sent = sotto_review::media::remux(&input, &dir.path().join("w4"), &render, "mp4", t).expect("remux");
+    assert!(!has(&sent, b"Apapa") && !has(&sent, b"6.4474"), "tags survived the send copy");
+    assert!(sent.len() > 1000);
+}

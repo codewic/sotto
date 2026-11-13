@@ -13,6 +13,18 @@
 //! `/out/photo.ppm` instead, and `info.txt` says only `Format: png` or `Format: jpeg` (the kind of
 //! file the clean copy should be).
 //!
+//! Media modes (third argument), all through ffmpeg here in the sandbox, all writing raw data:
+//!
+//! ```text
+//! probe         /out/info.txt: ffprobe's codec_type, width, height and duration lines
+//! audio:RATE    /out/audio.pcm: the first audio stream as mono signed 16-bit PCM at RATE Hz
+//! poster        /out/photo.ppm: the first video frame, longest side at most 2560
+//! video:WxH     /out/video.yuv: raw yuv420p frames at exactly W x H, 30 a second (a pipe the
+//!               caller reads from; nothing is stored)
+//! remux:EXT     /out/clean.EXT: your own video with the same streams and every metadata tag
+//!               dropped (location, camera, times), for sending
+//! ```
+//!
 //! Nothing here is trusted by the caller: the agent parses only the simple
 //! formats above, with strict limits, outside the sandbox.
 
@@ -129,6 +141,76 @@ fn render_image(input: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Run ffmpeg quietly; the caller only ever reads the raw output files.
+fn ffmpeg(args: &[&str]) -> bool {
+    run(Command::new("ffmpeg").args(["-nostdin", "-hide_banner", "-v", "error", "-y"]).args(args))
+}
+
+/// Longest audio the sandbox turns into samples: 30 minutes.
+const AUDIO_MAX_SECS: &str = "1800";
+/// Longest video made playable: 10 minutes.
+const VIDEO_MAX_SECS: &str = "600";
+
+fn media(mode: &str, out: &Path) -> Result<&'static str, String> {
+    let input = "/in/file";
+    let o = |name: &str| out.join(name).display().to_string();
+    if mode == "probe" {
+        let res = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration", "-of", "default=nw=1", input])
+            .output()
+            .map_err(|_| "ffmpeg isn't available")?;
+        if !res.status.success() {
+            return Err("this isn't a video or audio file Sotto can open".into());
+        }
+        fs::write(out.join("info.txt"), &res.stdout[..res.stdout.len().min(16 * 1024)]).map_err(|_| "cannot write output")?;
+        return Ok("probe");
+    }
+    if let Some(rate) = mode.strip_prefix("audio:") {
+        let rate: u32 = rate.parse().map_err(|_| "bad mode")?;
+        let rate = rate.clamp(8000, 48000).to_string();
+        if !ffmpeg(&["-i", input, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", &rate, "-t", AUDIO_MAX_SECS, "-f", "s16le", &o("audio.pcm")]) {
+            return Err("the audio could not be decoded".into());
+        }
+        return Ok("audio");
+    }
+    if mode == "poster" {
+        if !ffmpeg(&["-i", input, "-map", "0:v:0", "-frames:v", "1", "-vf", "scale='min(2560,iw)':-2", "-f", "image2", "-c:v", "ppm", &o("photo.ppm")]) {
+            return Err("the video could not be decoded".into());
+        }
+        let _ = fs::write(out.join("info.txt"), "Format: jpeg");
+        return Ok("poster");
+    }
+    if let Some(size) = mode.strip_prefix("video:") {
+        let (w, h) = size.split_once('x').ok_or("bad mode")?;
+        let (w, h): (u32, u32) = (w.parse().map_err(|_| "bad mode")?, h.parse().map_err(|_| "bad mode")?);
+        if !(16..=1920).contains(&w) || !(16..=1920).contains(&h) || w % 2 == 1 || h % 2 == 1 {
+            return Err("bad mode".into());
+        }
+        let vf = format!("scale={w}:{h},fps=30,format=yuv420p");
+        if !ffmpeg(&["-i", input, "-map", "0:v:0", "-an", "-vf", &vf, "-t", VIDEO_MAX_SECS, "-f", "rawvideo", "-pix_fmt", "yuv420p", &o("video.yuv")]) {
+            return Err("the video could not be decoded".into());
+        }
+        return Ok("video");
+    }
+    if let Some(ext) = mode.strip_prefix("remux:") {
+        let ext = match ext {
+            "mp4" | "webm" | "mkv" => ext,
+            _ => return Err("bad mode".into()),
+        };
+        let target = o(&format!("clean.{ext}"));
+        let mut args = vec!["-i", input, "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact"];
+        if ext == "mp4" {
+            args.extend(["-movflags", "+faststart"]);
+        }
+        args.push(&target);
+        if !ffmpeg(&args) {
+            return Err("the video could not be repackaged".into());
+        }
+        return Ok("remux");
+    }
+    Err("bad mode".into())
+}
+
 /// Longest side of a photo's clean copy.
 const PHOTO_MAX: u32 = 2560;
 
@@ -203,6 +285,16 @@ fn main() {
         b.truncate(n);
         b
     };
+    if let Some(mode) = args.get(2).map(String::as_str).filter(|m| *m != "photo") {
+        match media(mode, out) {
+            Ok(kind) => status(out, &format!("ok {kind}")),
+            Err(e) => {
+                status(out, &format!("error {e}"));
+                std::process::exit(3);
+            }
+        }
+        return;
+    }
     if args.get(2).map(String::as_str) == Some("photo") {
         let result = match detect(&head) {
             Kind::Image => render_photo(input, out),
