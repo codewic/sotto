@@ -17,7 +17,7 @@ export function Mark({ size = 32, className = "" }: { size?: number; className?:
 /** Loading: the bubble outline drawing itself, in the accent colour. No tile behind it. */
 export function MarkIndicator({ size = 20, label, inherit = false }: { size?: number; label?: string; inherit?: boolean }) {
   return (
-    <span role="status" aria-live="polite" className={`inline-flex items-center gap-2 ${inherit ? "" : "text-primary"}`}>
+    <span role="status" aria-live="polite" className={`relative inline-flex items-center gap-2 ${inherit ? "" : "text-primary"}`}>
       <svg width={size} height={size} viewBox="0 0 48 48" fill="none" className="mark-draw" aria-hidden="true">
         <path
           d="M14 13h20a5 5 0 0 1 5 5v11a5 5 0 0 1-5 5H23l-7 6v-6h-2a5 5 0 0 1-5-5V18a5 5 0 0 1 5-5Z M17 23.5h14"

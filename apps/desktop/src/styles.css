@@ -338,6 +338,14 @@ body,
   height: 100%;
 }
 
+/* The window never scrolls as a whole: every pane scrolls inside itself. #root is the containing
+   block for anything absolutely placed without a nearer one (a screen-reader label inside a
+   scrolled pane, say), and clips it, so nothing can make the window taller than itself. */
+#root {
+  position: relative;
+  overflow: clip;
+}
+
 body {
   margin: 0;
   background: var(--background);

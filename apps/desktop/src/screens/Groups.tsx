@@ -746,7 +746,7 @@ export function NewGroupDialog({ open, contacts, onClose, onCreated }: { open: b
                 const on = picked.has(c.id);
                 return (
                   <li key={c.id}>
-                    <label className={`group/pick flex h-11 cursor-pointer items-center gap-2.5 rounded-lg px-2 transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${on ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]" : "hover:bg-pane"}`}>
+                    <label className={`group/pick relative flex h-11 cursor-pointer items-center gap-2.5 rounded-lg px-2 transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${on ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]" : "hover:bg-pane"}`}>
                       <input
                         type="checkbox"
                         checked={on}
