@@ -175,7 +175,7 @@ function InCallBar({ call, name }: { call: CallView; name: string }) {
   }, [call.phase]);
   return (
     <div
-      className="fixed top-3 left-1/2 flex h-10 -translate-x-1/2 items-center gap-3 rounded-full bg-pane pr-1.5 pl-4 text-[13px] whitespace-nowrap shadow-float"
+      className="no-drag fixed top-3 left-1/2 flex h-10 -translate-x-1/2 items-center gap-3 rounded-full bg-pane pr-1.5 pl-4 text-[13px] whitespace-nowrap shadow-float"
       style={{ zIndex: "var(--z-sticky)" }}
       role="status"
     >
@@ -256,7 +256,7 @@ function IncomingCall({ call, contact }: { call: CallView; contact?: Contact }) 
   };
   return (
     <div
-      className="fixed top-4 left-1/2 w-[360px] max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-2xl bg-pane p-4 shadow-float"
+      className="no-drag fixed top-4 left-1/2 w-[360px] max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-2xl bg-pane p-4 shadow-float"
       style={{ zIndex: "var(--z-modal)", animation: "dialog-in 220ms var(--ease-smooth)" }}
       role="alertdialog"
       aria-label={call.group ? `${name} is adding you to a group call` : `Incoming call from ${name}`}

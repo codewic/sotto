@@ -17,9 +17,13 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
 tokio-socks = "0.5.3"
 tokio-tungstenite = "0.30.0"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+webpki-roots = "1.0.12"
 zeroize = "1.9.1"
 
 [dev-dependencies]
 sotto-relay = { path = "../sotto-relay" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "time", "sync", "io-util"] }
 tempfile = "3.27.0"
 serde_json = "1"

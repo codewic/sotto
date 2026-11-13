@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { get, post } from "../api";
-import { Mark } from "../brand/Mark";
 import { GlyphCases, GlyphConversations, GlyphDrop, GlyphLock, GlyphReview, GlyphSettings, GlyphShield } from "../brand/glyphs";
 import type { ChannelView, Contact, DropView, GroupView, Status } from "../types";
 import { setAppearance, toggleScheme } from "../theme/appearance";
@@ -106,12 +105,8 @@ export function Shell({ status }: { status: Status }) {
   return (
     <NavCtx.Provider value={{ go, state, status }}>
       <CallLayer contacts={contacts.data ?? []} onSettings={() => go("settings", "calls")}>
-      <div className="flex h-svh bg-background">
-        <aside className="flex w-[64px] shrink-0 flex-col py-3 pl-2 md:w-[236px] md:pl-3">
-          <div className="flex items-center gap-2.5 px-2 pt-1 pb-4">
-            <Mark size={28} />
-            <span className="hidden text-[15px] font-semibold tracking-tight md:inline">Sotto</span>
-          </div>
+      <div className="flex h-full bg-background">
+        <aside className="flex w-[64px] shrink-0 flex-col pt-1 pb-3 pl-2 md:w-[236px] md:pl-3">
           <button
             type="button"
             onClick={() => setPalette(true)}
@@ -172,7 +167,7 @@ export function Shell({ status }: { status: Status }) {
             </button>
           </div>
         </aside>
-        <main className="my-2 mr-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-pane shadow-pane">
+        <main className="mr-2 mb-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-pane shadow-pane">
           {state.screen === "conversations" && <Conversations initial={state.param} />}
           {state.screen === "drops" && <Drops />}
           {state.screen === "cases" && <Cases />}
@@ -191,14 +186,18 @@ function ConnectionCard({ status }: { status: Status }) {
   const tor = status.profile?.transport.kind === "tor";
   const online = relays.filter((r) => r.status === "online").length;
   const state = relays.length === 0 ? "idle" : online === relays.length ? "online" : relays.some((r) => r.status === "connecting") ? "connecting" : online > 0 ? "partial" : "offline";
-  const text = {
-    idle: "Ready",
-    online: tor ? "Connected over Tor" : "Connected directly",
-    connecting: "Connecting…",
-    partial: "Some relays unreachable",
-    offline: "Relay unreachable",
-  }[state];
-  const dot = state === "offline" ? "bg-destructive" : state === "online" || state === "idle" ? "bg-primary" : "bg-muted-foreground";
+  const torDown = tor && status.tor_running === false;
+  const text = torDown
+    ? "Tor isn't running"
+    : {
+        idle: "Ready",
+        online: tor ? "Connected over Tor" : "Connected directly",
+        connecting: "Connecting…",
+        partial: "Some relays unreachable",
+        offline: "Relay unreachable",
+      }[state];
+  const dot = torDown || state === "offline" ? "bg-destructive" : state === "online" || state === "idle" ? "bg-primary" : "bg-muted-foreground";
+  const { go } = useNav();
   const mode = status.settings?.risk_mode ?? "standard";
   return (
     <div className="rounded-xl bg-muted px-3 py-2.5">
@@ -210,7 +209,12 @@ function ConnectionCard({ status }: { status: Status }) {
         <GlyphShield className="size-3.5" />
         {mode === "standard" ? "Standard protection" : mode === "high" ? "High risk mode" : "Extreme mode"}
       </div>
-      {!tor && <div className="mt-1 text-[12px] text-destructive">Not using Tor</div>}
+      {!tor && mode !== "standard" && <div className="mt-1 text-[12px] text-destructive">Not using Tor: relays see your network address</div>}
+      {(torDown || state === "offline") && (
+        <button type="button" onClick={() => go("settings", "connection")} className="mt-1.5 cursor-pointer text-[12px] font-medium text-primary hover:underline">
+          {torDown ? "Start Tor, or connect directly" : "Check connection settings"}
+        </button>
+      )}
     </div>
   );
 }
@@ -240,7 +244,7 @@ function Palette({ onClose, contacts, onLock }: { onClose: () => void; contacts:
   useEffect(() => input.current?.focus(), []);
   // No open or close animation: the palette is used constantly, and motion would only slow it down.
   return (
-    <div className="fixed inset-0 grid place-items-start justify-center bg-black/30 pt-[14vh]" style={{ zIndex: "var(--z-modal)" }} onMouseDown={onClose}>
+    <div className="no-drag fixed inset-0 grid place-items-start justify-center bg-black/30 pt-[14vh]" style={{ zIndex: "var(--z-modal)" }} onMouseDown={onClose}>
       <div className="w-[560px] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl bg-pane shadow-float" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Search and commands">
         <div className="flex items-center gap-2 border-b border-line px-4">
           <Search size={16} className="text-muted-foreground" />

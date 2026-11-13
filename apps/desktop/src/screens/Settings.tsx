@@ -29,10 +29,11 @@ type Tab = "general" | "appearance";
 let lastTab: Tab = "general";
 
 export function Settings({ initial }: { initial?: string }) {
-  const [tab, setTabState] = useState<Tab>(initial === "appearance" ? "appearance" : initial === "calls" ? "general" : lastTab);
+  const [tab, setTabState] = useState<Tab>(initial === "appearance" ? "appearance" : initial === "calls" || initial === "connection" ? "general" : lastTab);
   // Opened from "Set up calls first": go straight to the Calls section.
   useEffect(() => {
     if (initial === "calls") document.getElementById("settings-calls")?.scrollIntoView({ block: "start" });
+    if (initial === "connection") document.getElementById("settings-connection")?.scrollIntoView({ block: "start" });
   }, [initial]);
   const setTab = (t: Tab) => {
     lastTab = t;
@@ -46,6 +47,8 @@ export function Settings({ initial }: { initial?: string }) {
   const [name, setName] = useState(p.display_name);
   const [relay, setRelay] = useState(p.default_relay);
   const [socks, setSocks] = useState(p.transport.kind === "tor" ? p.transport.socks : "127.0.0.1:9050");
+  const [via, setVia] = useState<"direct" | "tor">(p.transport.kind);
+  const shipped = status.shipped_relay ?? "";
   const [dialog, setDialog] = useState<"passcode" | "duress" | "erase" | "travel" | null>(null);
 
   const tabs = (short: boolean) => (
@@ -142,21 +145,51 @@ export function Settings({ initial }: { initial?: string }) {
             </form>
           </Section>
 
-          <Section title="Connection" description="Changes apply the next time you unlock Sotto.">
+          <Section id="settings-connection" title="Connection" description="How Sotto reaches the relay that carries your sealed messages. Changes apply the next time you unlock Sotto.">
             <form
               className="flex flex-col gap-6"
               onSubmit={(e) => {
                 e.preventDefault();
-                void save({ default_relay: relay, transport: { kind: "tor", socks } }, "Connection saved. Lock and unlock Sotto to use it.");
+                void save({ default_relay: relay, transport: via === "tor" ? { kind: "tor", socks } : { kind: "direct" } }, "Connection saved. Lock and unlock Sotto to use it.");
               }}
             >
-              <Field label="Tor address" value={socks} onChange={(e) => setSocks(e.target.value)} spellCheck={false} hint="tor service: 127.0.0.1:9050 · Tor Browser: 127.0.0.1:9150" />
-              <Field label="Relay address" value={relay} onChange={(e) => setRelay(e.target.value)} spellCheck={false} hint="New conversations use this relay. Existing ones keep theirs." />
-              {p.transport.kind === "direct" && <Notice tone="danger">You're connecting directly, without Tor. Relays can see your network address. Save a Tor address to fix this.</Notice>}
+              <div className="flex flex-col gap-2">
+                <Segmented
+                  label="Connect"
+                  value={via}
+                  onChange={setVia}
+                  options={[
+                    { value: "direct", label: "Directly" },
+                    { value: "tor", label: "Through Tor" },
+                  ]}
+                />
+                <p className="text-[12.5px] text-muted-foreground">
+                  {via === "direct"
+                    ? "The relay sees your network address, never your messages or who you talk to."
+                    : "The relay never learns where you are. Tor Browser or the tor service must be running on this computer."}
+                </p>
+              </div>
+              {via === "tor" && <Field label="Tor address" value={socks} onChange={(e) => setSocks(e.target.value)} spellCheck={false} hint="tor service: 127.0.0.1:9050 · Tor Browser: 127.0.0.1:9150" />}
+              {via === "tor" && status.tor_running === false && p.transport.kind === "tor" && <Notice tone="danger">Nothing answers at {p.transport.socks}, so Sotto can't connect. Start Tor Browser or the tor service, or connect directly.</Notice>}
+              {via === "direct" && s.risk_mode !== "standard" && <Notice tone="danger">In {s.risk_mode === "high" ? "High risk" : "Extreme"} mode, connect through Tor so relays can't see your network address.</Notice>}
+              <Field
+                label="Relay address"
+                value={relay}
+                onChange={(e) => setRelay(e.target.value)}
+                spellCheck={false}
+                hint={relay === shipped ? "Sotto's own relay. If your organization runs one, enter its address. New conversations use it; existing ones keep theirs." : "New conversations use this relay. Existing ones keep theirs."}
+              />
+              {shipped && relay !== shipped && (
+                <div>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRelay(shipped)}>
+                    Use Sotto's relay
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 {(status.relays ?? []).map((r) => (
                   <Chip key={r.url} tone={r.status === "online" ? "accent" : r.status === "offline" ? "danger" : "neutral"}>
-                    {r.status === "online" ? "Online" : r.status === "offline" ? "Unreachable" : "Connecting"} · {r.url.replace("ws://", "").slice(0, 28)}
+                    {r.status === "online" ? "Online" : r.status === "offline" ? "Unreachable" : "Connecting"} · {r.url.replace(/^wss?:\/\//, "").slice(0, 28)}
                   </Chip>
                 ))}
               </div>

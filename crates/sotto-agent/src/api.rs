@@ -122,7 +122,7 @@ fn ok() -> R {
 
 async fn status(State(agent): A) -> R {
     let state = agent.state().await;
-    let mut out = json!({ "state": state, "version": env!("CARGO_PKG_VERSION") });
+    let mut out = json!({ "state": state, "version": env!("CARGO_PKG_VERSION"), "shipped_relay": agent.default_relay });
     if let Ok(s) = agent.session().await {
         let p = s.engine.profile().await;
         let settings = s.settings.lock().await.clone();
@@ -135,6 +135,11 @@ async fn status(State(agent): A) -> R {
         });
         out["settings"] = serde_json::to_value(settings).unwrap_or(Value::Null);
         out["relays"] = json!(relays);
+        // Whether anything answers at the Tor address, so "unreachable" can say why.
+        if let Transport::Tor { socks } = &p.transport {
+            let up = tokio::time::timeout(std::time::Duration::from_millis(400), tokio::net::TcpStream::connect(socks.as_str())).await.is_ok_and(|r| r.is_ok());
+            out["tor_running"] = json!(up);
+        }
         out["sandbox"] = json!(sotto_review::sandbox::available());
     }
     Ok(Json(out))

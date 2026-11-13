@@ -187,6 +187,11 @@ impl Agent {
         let reviews = Arc::new(vault.scope(scopes.reviews)?);
         let cases = Arc::new(vault.scope(scopes.cases)?);
         let engine = Engine::start(engine_store, EngineConfig { default_relay: relay, transport }).await?;
+        // Installed copies before 0.2.3 were set up against a relay on the developer's own machine.
+        let saved = engine.profile().await.default_relay;
+        if (saved == crate::LOCAL_TEST_RELAY || saved == "ws://localhost:7400") && self.default_relay != saved && !self.default_relay.contains("127.0.0.1") {
+            let _ = engine.update_profile(None, Some(self.default_relay.clone()), None).await;
+        }
         engine.set_cover_traffic(settings.risk_mode != RiskMode::Standard).await;
         let session = Arc::new(Session {
             vault: Mutex::new(vault),

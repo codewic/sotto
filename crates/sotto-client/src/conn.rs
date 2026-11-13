@@ -21,7 +21,8 @@ use crate::{Error, Result};
 /// How to reach relays.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Transport {
-    /// Plain TCP. Only for local development and tests.
+    /// Straight to the relay: TLS for `wss://` relays, plain TCP for local `ws://` ones. The relay
+    /// sees your network address.
     Direct,
     /// Through a Tor SOCKS5 proxy, normally `127.0.0.1:9050` (tor) or `127.0.0.1:9150` (Tor Browser).
     Tor { socks: String },
@@ -67,19 +68,50 @@ pub struct RelayConn {
 struct Target {
     host: String,
     port: u16,
+    tls: bool,
 }
 
 fn parse_url(url: &str) -> Result<Target> {
-    let rest = url.strip_prefix("ws://").ok_or(Error::BadRelay)?;
+    let (rest, tls) = match (url.strip_prefix("wss://"), url.strip_prefix("ws://")) {
+        (Some(r), _) => (r, true),
+        (None, Some(r)) => (r, false),
+        _ => return Err(Error::BadRelay),
+    };
     let authority = rest.split('/').next().unwrap_or("");
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse().map_err(|_| Error::BadRelay)?),
-        None => (authority.to_string(), 80),
+        None => (authority.to_string(), if tls { 443 } else { 80 }),
     };
     if host.is_empty() {
         return Err(Error::BadRelay);
     }
-    Ok(Target { host, port })
+    Ok(Target { host, port, tls })
+}
+
+/// TLS for `wss://` relays, trusting the Mozilla root certificates built into Sotto (the same on
+/// every computer, whatever the system has installed).
+fn tls() -> tokio_rustls::TlsConnector {
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    let config = CONFIG.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        // Debug builds only: tests trust a throwaway certificate for a local TLS relay.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("SOTTO_TEST_RELAY_CA")
+        {
+            use rustls::pki_types::pem::PemObject;
+            for cert in rustls::pki_types::CertificateDer::pem_file_iter(path).into_iter().flatten().flatten() {
+                let _ = roots.add(cert);
+            }
+        }
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring supports the default TLS versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Arc::new(config)
+    });
+    tokio_rustls::TlsConnector::from(config.clone())
 }
 
 /// Check a relay address without connecting.
@@ -107,7 +139,11 @@ async fn open(url: &str, transport: &Transport, isolation: &str) -> Result<Box<d
             Box::new(s)
         }
     };
-    Ok(stream)
+    if !t.tls {
+        return Ok(stream);
+    }
+    let name = rustls::pki_types::ServerName::try_from(t.host.clone()).map_err(|_| Error::BadRelay)?;
+    Ok(Box::new(tls().connect(name, stream).await.map_err(|_| Error::Offline)?))
 }
 
 impl RelayConn {
@@ -338,6 +374,10 @@ mod tests {
     fn parses_relay_urls() {
         let t = parse_url("ws://abcdefghijklmnop.onion").unwrap();
         assert_eq!((t.host.as_str(), t.port), ("abcdefghijklmnop.onion", 80));
+        let t = parse_url("wss://relay.example.org").unwrap();
+        assert!(t.tls && t.port == 443 && t.host == "relay.example.org");
+        let t = parse_url("wss://relay.example.org:8443/").unwrap();
+        assert!(t.tls && t.port == 8443);
         let t = parse_url("ws://127.0.0.1:7400/").unwrap();
         assert_eq!((t.host.as_str(), t.port), ("127.0.0.1", 7400));
         assert!(parse_url("http://x").is_err());

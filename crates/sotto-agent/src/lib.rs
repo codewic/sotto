@@ -27,6 +27,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 pub use api::router;
+
+/// The relay Sotto ships with: a public address with TLS, carrying sealed messages it can't read.
+/// Organizations can set their own in Settings; development desks pass `--relay`.
+pub const DEFAULT_RELAY: &str = "wss://relay.cmigl.org";
+
+/// Where development and test relays run. A vault set up against it outside development is moved
+/// to the shipped relay on unlock (the local one only ever existed on a developer's machine).
+pub const LOCAL_TEST_RELAY: &str = "ws://127.0.0.1:7400";
 pub use state::{Agent, spawn_background};
 
 #[derive(Debug, thiserror::Error)]

@@ -15,13 +15,14 @@ type Step = "welcome" | "passcode" | "connection";
 const protects = [
   ["No phone number, email or username", "Your identity is a set of keys on this device. No server knows who you are."],
   ["Nobody can map who talks to whom", "Each conversation uses its own one-way mailboxes on relays that can't see sender or receiver."],
-  ["Everything travels over Tor", "Relays never learn your network location."],
+  ["Tor when you need it", "Turn it on and relays never learn where you are, either."],
   ["Files are opened in a sealed sandbox", "A hostile document can't reach this computer. You read a clean copy."],
 ];
 
 const limits = [
   "Spyware already on this computer or phone.",
   "Details in the information itself that only a few people know.",
+  "Without Tor, the relay sees your network address (never what you say or to whom).",
   "Someone watching both ends of the Tor network at once.",
 ];
 
@@ -32,7 +33,7 @@ export function Setup() {
   const [confirm, setConfirm] = useState("");
   const [duressOn, setDuressOn] = useState(false);
   const [duress, setDuress] = useState("");
-  const [kind, setKind] = useState<"tor" | "direct">("tor");
+  const [kind, setKind] = useState<"tor" | "direct">("direct");
   const [socks, setSocks] = useState("127.0.0.1:9050");
   const [relay, setRelay] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -166,9 +167,9 @@ export function Setup() {
               void create();
             }}
           >
-            <h1 className="text-[22px] font-semibold tracking-tight">Connect through Tor</h1>
+            <h1 className="text-[22px] font-semibold tracking-tight">How Sotto connects</h1>
             <p className="mt-1.5 text-[14px] text-muted-foreground">
-              Sotto sends everything through Tor so relays never learn where you are. Tor Browser or the tor service must be running on this computer.
+              Messages travel sealed through a relay, which never sees what you say or who you talk to. Choose Tor if the relay shouldn't learn where you are either.
             </p>
             <div className="mt-6">
               <Segmented
@@ -176,8 +177,8 @@ export function Setup() {
                 value={kind}
                 onChange={setKind}
                 options={[
-                  { value: "tor", label: "Tor" },
-                  { value: "direct", label: "Direct (testing only)" },
+                  { value: "direct", label: "Directly" },
+                  { value: "tor", label: "Through Tor" },
                 ]}
               />
             </div>
@@ -185,15 +186,15 @@ export function Setup() {
               {kind === "tor" ? (
                 <Field label="Tor address" value={socks} onChange={(e) => setSocks(e.target.value)} spellCheck={false} hint="The tor service uses 127.0.0.1:9050. Tor Browser uses 127.0.0.1:9150." />
               ) : (
-                <Notice tone="danger">Direct connections reveal your network address to the relay. Use them only for testing on your own machine.</Notice>
+                <p className="text-[13px] text-muted-foreground">Works anywhere, with nothing else to install. The relay sees your network address. You can switch to Tor any time in Settings.</p>
               )}
               <Field
                 label="Relay address"
-                placeholder="ws://…onion"
+                placeholder="Sotto's relay"
                 value={relay}
                 onChange={(e) => setRelay(e.target.value)}
                 spellCheck={false}
-                hint="Your organization gives you this. Leave it empty to use the default. You can change it later in Settings."
+                hint="Leave it empty to use Sotto's relay. If your organization runs its own, it gives you this address. You can change it later in Settings."
               />
             </div>
             {error && (

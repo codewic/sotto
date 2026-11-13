@@ -717,3 +717,11 @@ button:hover .broadcast-glyph .wave-2 {
     animation: none;
   }
 }
+
+/* The custom title bar drags the window; its buttons (and anything marked no-drag) stay clickable. */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}

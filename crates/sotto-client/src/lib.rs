@@ -26,7 +26,7 @@ pub enum Error {
     Offline,
     #[error("The relay refused the request ({0:?}).")]
     Relay(sotto_core::wire::ErrCode),
-    #[error("That relay address isn't valid. It should look like ws://example.onion")]
+    #[error("That relay address isn't valid. It should look like wss://relay.example.org, or ws://example.onion for a Tor relay")]
     BadRelay,
     #[error("Not found.")]
     NotFound,

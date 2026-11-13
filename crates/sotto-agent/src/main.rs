@@ -19,8 +19,9 @@ fn main() {
     let mut data: Option<PathBuf> = None;
     let mut socket: Option<PathBuf> = None;
     let mut listen: Option<String> = None;
-    let mut relay = "ws://127.0.0.1:7400".to_string();
-    let mut transport = Transport::Tor { socks: "127.0.0.1:9050".into() };
+    let mut relay = sotto_agent::DEFAULT_RELAY.to_string();
+    // Straight to the relay over TLS (Standard protection); Tor is a choice in setup and Settings.
+    let mut transport = Transport::Direct;
     let mut token: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {

@@ -1351,7 +1351,7 @@ export function ContextMenu({ x, y, onClose, children }: { x: number; y: number;
     <div
       ref={ref}
       role="menu"
-      className="fixed min-w-[200px] rounded-xl bg-pane p-1 shadow-float"
+      className="no-drag fixed min-w-[200px] rounded-xl bg-pane p-1 shadow-float"
       style={{ left: pos.left, top: pos.top, zIndex: "var(--z-modal)", transformOrigin: "top left", animation: "menu-in 140ms var(--ease-smooth)" }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("[role=menuitem]")) onClose();

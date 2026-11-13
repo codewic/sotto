@@ -21,4 +21,17 @@ contextBridge.exposeInMainWorld("sotto", {
   setAppearance: (a) => ipcRenderer.invoke("sotto:appearance", a),
   // Install a staged update (the shell verifies its signature again first), then restart.
   installUpdate: () => ipcRenderer.invoke("sotto:install-update"),
+  // The custom title bar.
+  platform: process.platform,
+  window: {
+    minimize: () => ipcRenderer.send("sotto:window", "minimize"),
+    toggleMaximize: () => ipcRenderer.send("sotto:window", "toggle-maximize"),
+    close: () => ipcRenderer.send("sotto:window", "close"),
+    isMaximized: () => ipcRenderer.sendSync("sotto:is-maximized"),
+    onMaximized: (fn) => {
+      const handler = (_e, on) => fn(!!on);
+      ipcRenderer.on("sotto:maximized", handler);
+      return () => ipcRenderer.removeListener("sotto:maximized", handler);
+    },
+  },
 });

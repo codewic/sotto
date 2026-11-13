@@ -7,9 +7,24 @@ import { Shell } from "./screens/Shell";
 import { Unlock } from "./screens/Unlock";
 import type { Status } from "./types";
 import { Button } from "./ui/Button";
+import { TitleBar } from "./ui/TitleBar";
 import { useToast } from "./ui/toast";
 
+/** Every screen sits under Sotto's own title bar (the window has no system frame). */
 export function App() {
+  const status = useQuery({ queryKey: ["status"], queryFn: () => get<Status>("/api/status") });
+  const unlocked = !!status.data && status.data.state !== "new" && status.data.state !== "locked";
+  return (
+    <div className="flex h-svh flex-col bg-background">
+      <TitleBar brand={unlocked} />
+      <div className="min-h-0 flex-1">
+        <Screens />
+      </div>
+    </div>
+  );
+}
+
+function Screens() {
   const qc = useQueryClient();
   const toast = useToast();
   const status = useQuery({ queryKey: ["status"], queryFn: () => get<Status>("/api/status") });

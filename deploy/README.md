@@ -4,6 +4,8 @@ Both services bind to localhost and are reachable only as Tor onion services. Ne
 
 ## Relay
 
+Sotto apps connect to the hosted relay at `wss://relay.cmigl.org` by default. To run that one (or your organization's own public relay) on Coolify, see [relay/coolify/README.md](relay/coolify/README.md). The steps below are for an onion-only relay, reachable only through Tor.
+
 1. Install `tor` and build `sotto-relay` (`cargo build --release -p sotto-relay`), then copy the binary to `/usr/local/bin/`.
 2. Create the service user and data directory:
    ```

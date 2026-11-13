@@ -176,7 +176,7 @@ impl Engine {
     pub fn check_remote_relay(&self, url: &str) -> Result<()> {
         crate::conn::validate_relay_url(url)?;
         if self.inner.tor_only.load(Ordering::Relaxed) {
-            let host = url.trim_start_matches("ws://").split(['/', ':']).next().unwrap_or("");
+            let host = url.trim_start_matches("wss://").trim_start_matches("ws://").split(['/', ':']).next().unwrap_or("");
             if !host.ends_with(".onion") {
                 return Err(Error::Invalid("That relay isn't an onion service, so Sotto won't connect to it."));
             }

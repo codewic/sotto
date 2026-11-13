@@ -97,12 +97,17 @@ pub fn normalize(t: &str) -> Option<String> {
 }
 
 /// The relay part of a full tag (`relay.example.org:7400`) as a relay address, and back.
+/// The relay for a tag's host: secure WebSockets for public names, plain for onion services,
+/// local names and bare addresses (which run on test machines or behind Tor).
 fn relay_of(host: &str) -> String {
-    format!("ws://{}", host.trim().trim_start_matches("ws://").trim_end_matches('/'))
+    let h = host.trim().trim_start_matches("wss://").trim_start_matches("ws://").trim_end_matches('/');
+    let name = if h.starts_with('[') { h } else { h.rsplit_once(':').map(|(n, _)| n).unwrap_or(h) };
+    let plain = name.ends_with(".onion") || name == "localhost" || name.starts_with('[') || name.parse::<std::net::IpAddr>().is_ok();
+    if plain { format!("ws://{h}") } else { format!("wss://{h}") }
 }
 
 fn host_of(relay: &str) -> String {
-    relay.trim_start_matches("ws://").trim_end_matches('/').to_string()
+    relay.trim_start_matches("wss://").trim_start_matches("ws://").trim_end_matches('/').to_string()
 }
 
 /// `@ada`, `ada`, `ada@relay.example.org` or `@ada@relay.example.org:7400` → (tag, relay if given).
@@ -342,4 +347,20 @@ async fn decline(State(agent): A, Path(id): Path<String>) -> R {
     s.engine.delete_contact(&id).await?;
     agent.emit(json!({ "type": "contacts" }));
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod relay_address_tests {
+    use super::{host_of, parse_address};
+
+    #[test]
+    fn public_relays_use_tls_and_onion_or_local_ones_dont() {
+        assert_eq!(parse_address("ada@relay.example.org"), Some(("ada".into(), Some("wss://relay.example.org".into()))));
+        assert_eq!(parse_address("@ada@relay.example.org:8443"), Some(("ada".into(), Some("wss://relay.example.org:8443".into()))));
+        assert_eq!(parse_address("ada@abcdefghijklmnop.onion").unwrap().1.unwrap(), "ws://abcdefghijklmnop.onion");
+        assert_eq!(parse_address("ada@127.0.0.1:7400").unwrap().1.unwrap(), "ws://127.0.0.1:7400");
+        assert_eq!(parse_address("ada@localhost:7400").unwrap().1.unwrap(), "ws://localhost:7400");
+        assert_eq!(host_of("wss://relay.example.org/"), "relay.example.org");
+        assert_eq!(parse_address("@ada").unwrap().1, None);
+    }
 }

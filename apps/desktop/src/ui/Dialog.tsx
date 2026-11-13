@@ -28,7 +28,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className="sotto-dialog m-auto"
+      className="no-drag sotto-dialog m-auto"
       onCancel={(e) => {
         e.preventDefault();
         onClose();

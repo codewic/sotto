@@ -12,6 +12,16 @@ type Bridge = {
   setAppearance?(a: { scheme: "light" | "dark"; background: string }): Promise<void>;
   /** Install the staged update after checking its signature again, then restart. */
   installUpdate?(): Promise<{ ok: boolean; error?: string }>;
+  /** The operating system, for the title bar (macOS keeps its own window buttons). */
+  platform?: string;
+  /** The custom title bar's window buttons. */
+  window?: {
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    isMaximized(): boolean;
+    onMaximized(fn: (on: boolean) => void): () => void;
+  };
 };
 
 declare global {

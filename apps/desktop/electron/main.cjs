@@ -34,6 +34,8 @@ const socketPath = path.join(userData, "agent.sock");
 function agentBinary(name) {
   const packaged = path.join(process.resourcesPath || "", "bin", name);
   if (fs.existsSync(packaged)) return packaged;
+  // Development only: SOTTO_BIN_DIR points at another build (for example target/debug).
+  if (!app.isPackaged && process.env.SOTTO_BIN_DIR) return path.resolve(process.env.SOTTO_BIN_DIR, name);
   return path.resolve(__dirname, "../../../target/release", name);
 }
 
@@ -134,6 +136,9 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: "Sotto",
+    // Sotto draws its own title bar and window buttons (macOS keeps its traffic lights).
+    frame: process.platform === "darwin",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : undefined,
     // Close to the theme the page will pick; the page sends the exact colour once it loads.
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f3f3f3",
     show: false,
@@ -148,6 +153,10 @@ function createWindow() {
     },
   });
   win.once("ready-to-show", () => win.show());
+  // The title bar shows maximize or restore to match.
+  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    win.on(ev, () => win && !win.isDestroyed() && win.webContents.send("sotto:maximized", win.isMaximized() || win.isFullScreen()));
+  }
   // No navigation away from the app and no new windows.
   win.webContents.on("will-navigate", (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -240,6 +249,17 @@ async function openCall(id) {
 
 // Only the app's own page may use the bridge.
 const fromApp = (e) => Boolean(e.senderFrame && e.senderFrame.url.startsWith("file://") && win && e.sender === win.webContents);
+// The custom title bar's buttons.
+ipcMain.on("sotto:window", (e, action) => {
+  if (!fromApp(e) || !win) return;
+  if (action === "minimize") win.minimize();
+  else if (action === "toggle-maximize") (win.isMaximized() ? win.unmaximize() : win.maximize());
+  else if (action === "close") win.close();
+});
+ipcMain.on("sotto:is-maximized", (e) => {
+  e.returnValue = !!win && (win.isMaximized() || win.isFullScreen());
+});
+
 ipcMain.handle("sotto:request", (e, method, urlPath, body, headers) =>
   fromApp(e) ? request(method, urlPath, body, headers || {}) : { status: 403, body: { error: "Not allowed." } },
 );

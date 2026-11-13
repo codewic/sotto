@@ -275,7 +275,7 @@ export function VideoViewer({ item, onClose }: { item: VideoItem; onClose: () =>
   const when = new Date(item.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   const btn = "press grid size-10 cursor-pointer place-items-center rounded-full text-scrim-fg/85 hover:bg-scrim-fg/15 hover:text-scrim-fg disabled:cursor-default disabled:opacity-35";
   return (
-    <div role="dialog" aria-modal="true" aria-label={`Video: ${item.name}`} className="viewer-in fixed inset-0 flex flex-col bg-[var(--scrim)] text-scrim-fg" style={{ zIndex: "var(--z-modal)" }}>
+    <div role="dialog" aria-modal="true" aria-label={`Video: ${item.name}`} className="viewer-in no-drag fixed inset-0 flex flex-col bg-[var(--scrim)] text-scrim-fg" style={{ zIndex: "var(--z-modal)" }}>
       <div className="flex h-14 shrink-0 items-center gap-1.5 px-4">
         <div className="mr-2 min-w-0 flex-1">
           <div className="truncate text-[14px] font-medium">{item.name}</div>

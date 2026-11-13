@@ -12,6 +12,10 @@ export type Status = {
   settings?: Settings;
   relays?: { url: string; status: "connecting" | "online" | "offline" }[];
   sandbox?: boolean;
+  /** The relay Sotto ships with (or the one this copy was started with). */
+  shipped_relay?: string;
+  /** With Tor chosen: whether anything answers at the Tor address. */
+  tor_running?: boolean;
 };
 
 export type Settings = {

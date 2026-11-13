@@ -31,6 +31,17 @@ Machine notes: 4 cores, about 2 GB free RAM, no AVX2 (Vite pinned to 7). `.cargo
 - [x] Fixed: the desktop shell forwarded no "send as" header, so photos would have gone out uncleaned in the app (the browser preview didn't use that path)
 - [ ] Forward a photo; Media, Files, Voice and Links tabs in the info panel
 
+## Connection (0.2.3)
+- [x] Installed copies pointed at a relay on the developer's machine (ws://127.0.0.1:7400) through Tor, so they were always "Relay unreachable". Now they ship with Sotto's relay, `wss://relay.cmigl.org`, connecting directly; old vaults on the local test relay move to it on unlock
+- [x] Secure WebSockets: `wss://` relays over TLS, checked against Sotto's built-in root certificates, direct or through Tor; tests `connects_to_a_relay_over_wss` and `refuses_a_relay_with_an_untrusted_certificate`
+- [x] Tags on public relays use `wss://`; onion and local ones keep `ws://`
+- [x] Setup and Settings offer Directly or Through Tor as equals; Settings could only save Tor before. The sidebar says when Tor isn't running and links to the fix
+- [x] The relay ships in the signed tools archive; `deploy/relay/coolify` installs exactly that build
+- [ ] Owner: DNS `relay.cmigl.org` to the Coolify server, then deploy `deploy/relay/coolify/docker-compose.yml` (generated after 0.2.3 is published)
+
+## Window
+- [x] Frameless window with Sotto's own title bar: mark and name, minimize, maximize or restore, close; every screen has it; overlays stay clickable over it (standing rule in DESIGN_PRINCIPLES.md section 6)
+
 ## Calls
 - [x] Ships with Sotto's own call server, `https://calls.cmigl.org` (media on `wss://rtc.cmigl.org`); organizations can set theirs, and "Use Sotto's call server" goes back
 
