@@ -797,6 +797,10 @@ async fn updates_install_only_signed_matching_packages() {
         manifest: Vec<u8>,
         sig: String,
         package: Vec<u8>,
+        /// Cut the next full download off halfway, like a dropped connection.
+        cut_once: bool,
+        /// How many downloads asked to carry on from part-way.
+        ranged: u32,
     }
     let rel: A<M<Rel>> = A::new(M::new(Rel::default()));
     let seed = [42u8; 32];
@@ -808,13 +812,48 @@ async fn updates_install_only_signed_matching_packages() {
         }))
         .unwrap();
         let sig = sotto_core::hex(&sign(&key, &signed_message(&manifest)).0);
-        *rel.lock().unwrap() = Rel { manifest, sig, package: served.to_vec() };
+        *rel.lock().unwrap() = Rel { manifest, sig, package: served.to_vec(), ..Default::default() };
     };
     let r2 = rel.clone();
     let app = Router::new()
         .route("/latest/download/latest.json", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().manifest.clone() } } }))
         .route("/latest/download/latest.json.sig", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().sig.clone() } } }))
-        .route("/download/{v}/{name}", axum::routing::get({ let r = r2.clone(); move || { let r = r.clone(); async move { r.lock().unwrap().package.clone() } } }));
+        .route(
+            "/download/{v}/{name}",
+            axum::routing::get({
+                let r = r2.clone();
+                move |headers: axum::http::HeaderMap| {
+                    let r = r.clone();
+                    async move {
+                        use axum::body::Body;
+                        use axum::http::Response;
+                        let mut g = r.lock().unwrap();
+                        let pkg = g.package.clone();
+                        let from = headers.get("range").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("bytes=")?.strip_suffix('-')?.parse::<usize>().ok());
+                        if let Some(from) = from {
+                            g.ranged += 1;
+                            let range = format!("bytes {from}-{}/{}", pkg.len() - 1, pkg.len());
+                            return Response::builder().status(206).header("content-range", range).body(Body::from(pkg[from..].to_vec())).unwrap();
+                        }
+                        if g.cut_once {
+                            g.cut_once = false;
+                            // Sends half the package, then the connection breaks.
+                            let half = axum::body::Bytes::from(pkg[..pkg.len() / 2].to_vec());
+                            let parts: Vec<Result<axum::body::Bytes, std::io::Error>> = vec![Ok(half), Err(std::io::Error::other("connection dropped"))];
+                            // A pause between them, so the first half really goes out before the break.
+                            let parts = futures_util::StreamExt::then(futures_util::stream::iter(parts), |p| async move {
+                                if p.is_err() {
+                                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                                }
+                                p
+                            });
+                            return Response::builder().body(Body::from_stream(parts)).unwrap();
+                        }
+                        Response::builder().body(Body::from(pkg)).unwrap()
+                    }
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -857,6 +896,17 @@ async fn updates_install_only_signed_matching_packages() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(std::fs::read(staged["path"].as_str().unwrap()).unwrap(), b"new build");
     assert!(sotto_core::release::verify_manifest(staged["manifest"].as_str().unwrap().as_bytes(), staged["sig"].as_str().unwrap(), &signing_public(&seed)));
+
+    // A download cut off halfway carries on from where it stopped and is still checked in full.
+    let big: Vec<u8> = (0..400_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    publish(&rel, "9.0.1", &big, &big, seed);
+    rel.lock().unwrap().cut_once = true;
+    let v = check().await;
+    assert_eq!(v["state"], "ready", "{v}");
+    assert_eq!(v["version"], "9.0.1");
+    assert!(rel.lock().unwrap().ranged >= 1, "the second attempt asked for the rest, not the whole package again");
+    let (_, staged) = call(&r, "GET", "/api/updates/staged", None).await;
+    assert_eq!(std::fs::read(staged["path"].as_str().unwrap()).unwrap(), big);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

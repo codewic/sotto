@@ -9,7 +9,8 @@
 //! Checks run about every 6 hours at random offsets, through Tor when Sotto uses Tor, and in
 //! Extreme mode only when you ask.
 
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,8 +18,10 @@ use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sotto_core::release::{newer, pinned_key, verify_manifest};
-use sotto_core::{hex, kdf};
+use sotto_client::Transport;
+use sotto_core::hex;
 
 use crate::ApiError;
 use crate::state::{Agent, RiskMode};
@@ -38,6 +41,8 @@ struct Status {
     notes: String,
     error: Option<String>,
     checked_at: Option<u64>,
+    /// While downloading: how much has arrived, in percent.
+    progress: Option<u8>,
     /// Ready to install: (file, kind, signed manifest, signature).
     staged: Option<(PathBuf, String, String, String)>,
 }
@@ -83,6 +88,7 @@ fn view() -> Value {
         "notes": s.notes,
         "error": s.error,
         "checked_at": s.checked_at,
+        "progress": s.progress,
         "installable": package_kind().is_some(),
     })
 }
@@ -97,6 +103,7 @@ pub async fn check(agent: &Arc<Agent>) -> Result<(), ApiError> {
     set(|s| {
         s.state = "checking";
         s.error = None;
+        s.progress = None;
     });
     emit(agent);
     let result = run(agent).await;
@@ -177,24 +184,111 @@ async fn run(agent: &Arc<Agent>) -> Result<(), ApiError> {
         s.state = "downloading";
         s.version = Some(version.clone());
         s.notes = notes.clone();
+        s.progress = Some(0);
     });
     emit(agent);
-    let bytes = get(format!("{}/download/v{version}/{name}", base())).await?;
-    if hex(&kdf::sha256(&bytes)) != file["sha256"].as_str().unwrap_or_default() || Some(bytes.len() as u64) != file["size"].as_u64() {
-        return Err(ApiError::Invalid("The downloaded update didn't match its signed fingerprint, so it was thrown away.".into()));
-    }
     let dir = agent.dir.parent().map(|p| p.join("updates")).unwrap_or_else(|| PathBuf::from("updates"));
     std::fs::create_dir_all(&dir).map_err(|_| ApiError::Internal)?;
     let path = dir.join(&name);
     let tmp = dir.join(format!("{name}.part"));
-    std::fs::write(&tmp, &bytes).map_err(|_| ApiError::Internal)?;
+    let size = file["size"].as_u64().unwrap_or(0);
+    let sha = file["sha256"].as_str().unwrap_or_default().to_string();
+    download(agent, &transport, &format!("{}/download/v{version}/{name}", base()), &tmp, size).await?;
+    if file_sha256(&tmp).as_deref() != Some(sha.as_str()) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ApiError::Invalid("The downloaded update didn't match its signed fingerprint, so it was thrown away.".into()));
+    }
     std::fs::rename(&tmp, &path).map_err(|_| ApiError::Internal)?;
     let manifest_s = String::from_utf8(manifest).unwrap_or_default();
     set(|s| {
         s.state = "ready";
+        s.progress = None;
         s.staged = Some((path, kind.clone(), manifest_s, sig.trim().to_string()));
     });
     Ok(())
+}
+
+/// Downloads a package into `tmp`. There's no overall time limit, since a big package on a slow
+/// line takes minutes; it gives up only when nothing arrives for a minute. A download that's cut
+/// off carries on from where it stopped, on the next attempt here or on the next check. It never
+/// keeps more than the signed size.
+async fn download(agent: &Arc<Agent>, transport: &Transport, url: &str, tmp: &Path, size: u64) -> Result<(), ApiError> {
+    let mut b = reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).user_agent("sotto");
+    if let Transport::Tor { socks } = transport {
+        b = b.proxy(reqwest::Proxy::all(format!("socks5h://{socks}")).map_err(|_| ApiError::Invalid("Bad Tor address.".into()))?);
+    }
+    let client = b.build().map_err(|_| ApiError::Internal)?;
+    let cut_off = || ApiError::Invalid("The update download kept getting cut off. Sotto will pick it up where it stopped next time.".into());
+    for attempt in 0..6 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(2 * attempt)).await;
+        }
+        let mut have = std::fs::metadata(tmp).map(|m| m.len()).unwrap_or(0);
+        if have > size {
+            let _ = std::fs::remove_file(tmp);
+            have = 0;
+        }
+        if have == size {
+            return Ok(());
+        }
+        let mut req = client.get(url);
+        if have > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={have}-"));
+        }
+        let Ok(mut r) = req.send().await else { continue };
+        let append = match r.status().as_u16() {
+            206 if have > 0 => true,
+            200 => false,
+            _ => return Err(ApiError::Invalid("The update server didn't have that release's package.".into())),
+        };
+        if !append {
+            have = 0;
+        }
+        let Ok(mut f) = std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(tmp) else {
+            return Err(ApiError::Internal);
+        };
+        let mut shown = u8::MAX;
+        loop {
+            match r.chunk().await {
+                Ok(Some(c)) => {
+                    have += c.len() as u64;
+                    if have > size {
+                        drop(f);
+                        let _ = std::fs::remove_file(tmp);
+                        return Err(ApiError::Invalid("The downloaded update didn't match its signed fingerprint, so it was thrown away.".into()));
+                    }
+                    f.write_all(&c).map_err(|_| ApiError::Internal)?;
+                    let pct = (have * 100 / size.max(1)) as u8;
+                    if pct != shown {
+                        shown = pct;
+                        set(|s| s.progress = Some(pct));
+                        emit(agent);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        let _ = f.flush();
+        if have == size {
+            return Ok(());
+        }
+    }
+    Err(cut_off())
+}
+
+fn file_sha256(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(hex(&h.finalize()[..]))
 }
 
 /// After unlock: check a few minutes in, then about every 6 hours, never in Extreme mode.

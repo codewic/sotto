@@ -380,8 +380,29 @@ h3 {
 
 .scroll-pane {
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--muted-strong) transparent;
+}
+
+/* Quiet scrollbars everywhere: a slim rounded thumb, no arrow buttons, no track. Chromium only
+   uses these while scrollbar-width and scrollbar-color are left unset, so don't set them. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-thumb {
+  /* The transparent edge insets the thumb so it reads as 4 px wide inside a 10 px hit area. */
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--muted-strong) padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground) padding-box;
 }
 
 /* Pressable feedback, used by every button. */

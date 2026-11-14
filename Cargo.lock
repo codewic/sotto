@@ -3399,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-agent"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -3412,6 +3412,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sotto-cases",
  "sotto-client",
  "sotto-core",
@@ -3430,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-call-broker"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "axum",
  "futures-util",
@@ -3448,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-call-spike"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64 0.23.1",
  "serde_json",
@@ -3460,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-cases"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "openmls",
  "openmls_basic_credential",
@@ -3475,7 +3476,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-client"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "futures-util",
  "postcard",
@@ -3498,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -3522,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-directory"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "postcard",
  "serde",
@@ -3533,7 +3534,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-drop"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -3551,7 +3552,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-ffi"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde_json",
  "sotto-client",
@@ -3564,11 +3565,11 @@ dependencies = [
 
 [[package]]
 name = "sotto-hook"
-version = "0.2.5"
+version = "0.2.6"
 
 [[package]]
 name = "sotto-relay"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "futures-util",
  "postcard",
@@ -3581,7 +3582,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-release"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde_json",
  "sotto-core",
@@ -3589,7 +3590,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-review"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "flate2",
  "image",
@@ -3602,7 +3603,7 @@ dependencies = [
 
 [[package]]
 name = "sotto-vault"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "postcard",
  "serde",

@@ -16,6 +16,8 @@ export type UpdateView = {
   notes: string;
   error: string | null;
   checked_at: number | null;
+  /** While downloading: how much has arrived, in percent. */
+  progress: number | null;
   /** This copy can replace itself (an AppImage, .deb or Windows install). */
   installable: boolean;
 };
@@ -119,7 +121,7 @@ export function UpdatePanel({ extreme }: { extreme: boolean }) {
         : u.state === "available"
           ? `Version ${u.version} is available.`
           : u.state === "downloading"
-            ? `Downloading version ${u.version}…`
+            ? `Downloading version ${u.version}… ${u.progress ?? 0}%`
             : u.state === "checking"
               ? "Checking…"
               : u.state === "error"
@@ -129,7 +131,7 @@ export function UpdatePanel({ extreme }: { extreme: boolean }) {
                   : "Sotto checks for signed updates about every 6 hours.";
   return (
     <div className="mt-3 flex flex-wrap items-center gap-3">
-      <span className={`min-w-0 flex-1 text-[13px] ${u?.state === "error" ? "text-destructive" : "text-muted-foreground"}`} aria-live="polite">
+      <span className={`min-w-0 flex-1 text-[13px] tabular-nums ${u?.state === "error" ? "text-destructive" : "text-muted-foreground"}`} aria-live="polite">
         {line}
       </span>
       {(u?.state === "ready" || u?.state === "available") && (
