@@ -93,6 +93,12 @@ fn kind_of(name: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Which processor a file is built for, from its name (the relay ships for ARM servers too).
+fn arch_of(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    if n.contains("aarch64") || n.contains("arm64") { "aarch64" } else { "x86_64" }
+}
+
 fn manifest(version: &str, dir: &str, notes: Option<&str>) -> ExitCode {
     let mut files = Vec::new();
     let mut entries: Vec<_> = match std::fs::read_dir(dir) {
@@ -107,7 +113,7 @@ fn manifest(version: &str, dir: &str, notes: Option<&str>) -> ExitCode {
             Ok(x) => x,
             Err(m) => return fail(m),
         };
-        files.push(json!({ "name": name, "kind": kind, "os": os, "arch": "x86_64", "size": size, "sha256": sha256 }));
+        files.push(json!({ "name": name, "kind": kind, "os": os, "arch": arch_of(&name), "size": size, "sha256": sha256 }));
     }
     if files.is_empty() {
         return fail(format!("nothing to release in {dir}"));

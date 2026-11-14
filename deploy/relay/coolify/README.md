@@ -2,20 +2,19 @@
 
 This sets up the relay that Sotto apps connect to by default (`wss://relay.cmigl.org`). It carries sealed messages between mailboxes: it can't read them, and it can't see who sends to whom. It runs next to the call server on the same Coolify server.
 
-`docker-compose.yml` installs `sotto-relay` from a signed Sotto release. `make.py` writes it: it checks that release's signed manifest against the Sotto release key and puts the tools archive's SHA-256 into the file, so the build stops if the download differs by a single byte.
+Everything Coolify needs is in one file, `docker-compose.yml` in this folder. It installs `sotto-relay` from a signed Sotto release and refuses to build if the download differs by a single byte. Use it as it is; don't edit it.
 
 ## What you need
 
-- Coolify v4 on a server with a public IPv4 address (the call server's, `84.8.131.240`, is fine).
+- Coolify v4 on a server with a public IPv4 address (the call server's, `84.8.131.240`, is fine). Intel/AMD (x86_64) and ARM servers both work: the build picks the right one by itself.
 - A DNS `A` record: `relay.cmigl.org` pointing at that server.
 - Nothing else open: the relay goes through Coolify's proxy on ports 80 and 443, which you already have.
 
 ## Set it up
 
-1. For a new release, regenerate the file first: `python3 deploy/relay/coolify/make.py vX.Y.Z` (it needs `cargo`, to check the signature).
-2. In Coolify, open your project, choose **New Resource**, then **Docker Compose Empty**, paste the whole `docker-compose.yml`, and save.
-3. Set the domain on the **relay** service to `https://relay.cmigl.org:7400`. The `:7400` tells Coolify which container port to send traffic to; Coolify handles HTTPS, and WebSockets pass through it as they are.
-4. **Deploy.** It downloads the release and starts in under a minute.
+1. In Coolify, open your project, choose **New Resource**, then **Docker Compose Empty**, paste the whole `docker-compose.yml`, and save.
+2. Set the domain on the **relay** service to `https://relay.cmigl.org:7400`. The `:7400` tells Coolify which container port to send traffic to; Coolify handles HTTPS, and WebSockets pass through it as they are.
+3. **Deploy.** It downloads the release and starts in under a minute.
 
 ## Check it
 
@@ -34,4 +33,4 @@ The `relay-data` volume holds mailbox and group ids with their public keys and t
 
 ## Updating
 
-Run `make.py` for the new release, paste the new file over the old one in Coolify, and redeploy. The volume, and with it everyone's mailboxes, stays.
+When a release changes the relay, `docker-compose.yml` in this folder is updated with it. Paste the new file over the old one in Coolify and redeploy. The volume, and with it everyone's mailboxes, stays.

@@ -13,10 +13,11 @@ Releases are built by CI and signed by the owner. GitHub delivers them; the rele
 1. Bump the version in `Cargo.toml` (`[workspace.package]` and the internal `version = "x.y.z", path = ...` dependencies) and in `apps/desktop/package.json`, and build once so `Cargo.lock` follows.
 2. Write the notes in `docs/releases/vX.Y.Z.md`. They're shown in the app's update dialog and on the releases page.
 3. Commit, tag `vX.Y.Z` and push the tag (over SSH; the GitHub CLI's token can't push workflow files).
-4. CI (`.github/workflows/release.yml`) checks the tag matches both versions, builds the agent, sandbox renderer and `sotto-hook`, packages the AppImage and `.deb`, writes the unsigned `latest.json` and leaves a **draft** release in `codewic/sotto`.
+4. CI (`.github/workflows/release.yml`) checks the tag matches both versions, builds the agent, sandbox renderer and `sotto-hook`, builds the relay and hook for x86_64 and ARM (`sotto-tools-X.Y.Z-x86_64.tar.gz` and `-aarch64.tar.gz`), packages the AppImage and `.deb`, writes the unsigned `latest.json` and leaves a **draft** release in `codewic/sotto`.
 5. On the owner's machine: `cargo run -p sotto-release -- publish vX.Y.Z`. It downloads the draft, checks every file against `latest.json`, refuses to go on if the key isn't the pinned one, signs, uploads everything with `latest.json.sig` to a draft in `codewic/sotto-releases` (retrying each file), checks GitHub has every file at its full size, and only then publishes. If a big upload fails it stays a draft; run the same command again.
 6. Check: `sotto-release verify latest.json latest.json.sig` on the published files.
 7. Update the Vorynza site (`vorynza-site/src/content/products.ts`, the `sotto` entry): the download links name the version (`Sotto-X.Y.Z-x86_64.AppImage`), so point them at the new release, and add the release to `src/app/changelog/page.tsx`.
+8. If the release changes the relay, regenerate its Coolify file and commit it: `python3 deploy/relay/coolify/make.py vX.Y.Z` (needs `cargo`). It checks the published release's signed manifest against the pinned key and writes the tools archive's SHA-256 into `deploy/relay/coolify/docker-compose.yml`. Then tell the owner to paste the new file into Coolify and redeploy (see that folder's README). Never edit the file by hand.
 
 ## What the app does
 

@@ -11,7 +11,30 @@ permissions:
   contents: write
 
 jobs:
+  arm:
+    # The relay and hook for ARM servers (the Coolify package picks the build for its server).
+    # Ubuntu 22.04 like the x86 build, so the binaries need no newer glibc than Debian 12's.
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - name: Build the relay and hook
+        run: cargo build --release --locked -p sotto-relay -p sotto-hook
+      - name: Package them
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          tar -czf "out/sotto-tools-$V-aarch64.tar.gz" -C target/release sotto-hook sotto-relay
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-aarch64
+          path: out/*.tar.gz
+          if-no-files-found: error
+
   linux:
+    needs: arm
     # An older Ubuntu, so the AppImage runs on older systems too.
     runs-on: ubuntu-22.04
     steps:
@@ -32,6 +55,10 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-aarch64
+          path: out
       - name: Collect the files and write the unsigned manifest
         run: |
           V="${GITHUB_REF_NAME#v}"
