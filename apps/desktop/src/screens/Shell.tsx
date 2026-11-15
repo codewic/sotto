@@ -190,11 +190,12 @@ function ConnectionCard({ status }: { status: Status }) {
   const text = torDown
     ? "Tor isn't running"
     : {
-        idle: "Ready",
+        // The relay connection opens right after unlock, so "idle" is only the first moment.
+        idle: "Connecting…",
         online: tor ? "Connected over Tor" : "Connected directly",
         connecting: "Connecting…",
         partial: "Some relays unreachable",
-        offline: "Relay unreachable",
+        offline: relays.length === 1 ? `Can't reach ${relays[0].url.replace(/^wss?:\/\//, "").replace(/\/$/, "")}` : "Relays unreachable",
       }[state];
   const dot = torDown || state === "offline" ? "bg-destructive" : state === "online" || state === "idle" ? "bg-primary" : "bg-muted-foreground";
   const { go } = useNav();

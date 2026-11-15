@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("sotto", {
   setAppearance: (a) => ipcRenderer.invoke("sotto:appearance", a),
   // Install a staged update (the shell verifies its signature again first), then restart.
   installUpdate: () => ipcRenderer.invoke("sotto:install-update"),
+  // Copy text to the clipboard (copy buttons).
+  copy: (text) => ipcRenderer.invoke("sotto:copy", String(text ?? "")),
   // The custom title bar.
   platform: process.platform,
   window: {

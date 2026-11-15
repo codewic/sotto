@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type ApiError, del, post } from "../api";
+import { type ApiError, del, post, copyText } from "../api";
 import type { Message, SecretView } from "../types";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -112,7 +112,7 @@ function RevealDialog({ label, text, onClose }: { label: string; text: string | 
   // Clear what we put on the clipboard after a minute.
   useEffect(() => {
     if (!copied) return;
-    const t = setTimeout(() => void navigator.clipboard.writeText("").catch(() => {}), 60_000);
+    const t = setTimeout(() => void copyText("").catch(() => {}), 60_000);
     return () => clearTimeout(t);
   }, [copied]);
   return (
@@ -125,8 +125,7 @@ function RevealDialog({ label, text, onClose }: { label: string; text: string | 
             <Button
               icon={copied ? <Check size={15} /> : <Copy size={15} />}
               onClick={() =>
-                void navigator.clipboard
-                  .writeText(text ?? "")
+                void copyText(text ?? "")
                   .then(() => setCopied(true))
                   .catch(() => toast("error", "Couldn't copy. Select the text and copy it instead."))
               }

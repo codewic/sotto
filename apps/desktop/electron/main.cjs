@@ -1,6 +1,6 @@
 // Sotto desktop shell. The renderer is sandboxed with no Node access; every request goes
 // through a narrow IPC bridge to the local agent, which listens on a private Unix socket.
-const { app, BrowserWindow, Menu, ipcMain, dialog, nativeTheme, session } = require("electron");
+const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog, nativeTheme, session } = require("electron");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -249,6 +249,13 @@ async function openCall(id) {
 
 // Only the app's own page may use the bridge.
 const fromApp = (e) => Boolean(e.senderFrame && e.senderFrame.url.startsWith("file://") && win && e.sender === win.webContents);
+// Copy buttons: Electron's own clipboard, which doesn't depend on page permissions. Text only,
+// and only from the app's own page.
+ipcMain.handle("sotto:copy", (e, text) => {
+  if (!fromApp(e)) return false;
+  clipboard.writeText(String(text ?? "").slice(0, 200_000));
+  return true;
+});
 // The custom title bar's buttons.
 ipcMain.on("sotto:window", (e, action) => {
   if (!fromApp(e) || !win) return;
@@ -344,9 +351,9 @@ app.whenReady().then(async () => {
   // The main window may use the microphone for voice notes: audio only, and nothing else.
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb, details) => {
     const audioOnly = Array.isArray(details.mediaTypes) && details.mediaTypes.length > 0 && details.mediaTypes.every((t) => t === "audio");
-    cb(perm === "media" && audioOnly);
+    cb((perm === "media" && audioOnly) || perm === "clipboard-sanitized-write");
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === "media");
+  session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === "media" || perm === "clipboard-sanitized-write");
   // The renderer may only load its own files: nothing on the network.
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
     cb({ cancel: !details.url.startsWith("file://") && !details.url.startsWith("devtools://") });

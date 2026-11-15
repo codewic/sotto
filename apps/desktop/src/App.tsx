@@ -67,6 +67,9 @@ function Screens() {
           case "update":
             qc.invalidateQueries({ queryKey: ["updates"] });
             break;
+          case "tag":
+            qc.invalidateQueries({ queryKey: ["tag"] });
+            break;
           case "secret":
             if (e.contact_id) qc.invalidateQueries({ queryKey: ["secrets", e.contact_id] });
             break;

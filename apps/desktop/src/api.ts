@@ -12,6 +12,8 @@ type Bridge = {
   setAppearance?(a: { scheme: "light" | "dark"; background: string }): Promise<void>;
   /** Install the staged update after checking its signature again, then restart. */
   installUpdate?(): Promise<{ ok: boolean; error?: string }>;
+  /** Copy text with the app's own clipboard. */
+  copy?(text: string): Promise<boolean>;
   /** The operating system, for the title bar (macOS keeps its own window buttons). */
   platform?: string;
   /** The custom title bar's window buttons. */
@@ -153,3 +155,13 @@ export async function chooseSavePath(name: string): Promise<string | null> {
 }
 
 export const inApp = Boolean(bridge);
+
+/** Copy text. In the app this goes through Electron's clipboard (page clipboard access can be
+ *  refused); in a browser, through the page's. Throws if it couldn't. */
+export async function copyText(text: string): Promise<void> {
+  if (window.sotto?.copy) {
+    if (await window.sotto.copy(text)) return;
+    throw new Error("copy refused");
+  }
+  await navigator.clipboard.writeText(text);
+}

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AtSign, BellOff, Check, ChevronLeft, Copy, Info, MoreHorizontal, Paperclip, Pencil, Phone, Pin, PinOff, Reply, Search, Shield, ShieldOff, Trash2, UserMinus, Users, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { type ApiError, del, get, patch, post } from "../api";
+import { type ApiError, del, get, patch, post, copyText } from "../api";
 import type { Contact, GroupView, Message } from "../types";
 import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -367,7 +367,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                           }}
                           onReact={(e) => void react(m, e)}
                           onEdit={() => startEdit(m)}
-                          onCopy={() => navigator.clipboard.writeText(m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}
+                          onCopy={() => copyText(m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}
                           onMenu={(x, y) => setMenu({ m, x, y })}
                           onJump={jump}
                           onReview={() => void review(m)}
@@ -459,7 +459,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
             </MenuItem>
           )}
           {menu.m.text && (
-            <MenuItem icon={<Copy size={15} />} onClick={() => void navigator.clipboard.writeText(menu.m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}>
+            <MenuItem icon={<Copy size={15} />} onClick={() => void copyText(menu.m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}>
               Copy text
             </MenuItem>
           )}

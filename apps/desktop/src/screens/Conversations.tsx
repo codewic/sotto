@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { del, get, patch, post } from "../api";
+import { del, get, patch, post, copyText } from "../api";
 import { SpotConversations } from "../brand/spots";
 import type { ChannelView, Contact, GroupView, Message, SecretView } from "../types";
 import { useAppearance } from "../theme/appearance";
@@ -319,11 +319,11 @@ export function Conversations({ initial }: { initial?: string }) {
                     <Button variant="primary" onClick={() => setDialog("invite")}>
                       Invite someone
                     </Button>
-                    <Button onClick={() => setDialog("accept")}>Use an invite</Button>
+                    <Button onClick={() => setDialog("accept")}>Add someone</Button>
                   </div>
                 }
               >
-                Sotto has no directory to search. Meet in person and show a QR code, or send a one-time invite through a channel you already trust.
+                Send someone your tag and they can add you, or paste the tag or invite link someone sent you. Nobody can find you unless you tell them how.
               </Empty>
             </div>
           ) : (
@@ -731,7 +731,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
                           }}
                           onReact={(e) => react(m, e)}
                           onEdit={() => startEdit(m)}
-                          onCopy={() => navigator.clipboard.writeText(m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}
+                          onCopy={() => copyText(m.text ?? "").then(() => toast("info", "Copied. Clear your clipboard when you're done."))}
                           onMenu={(x, y) => setMenu({ m, x, y })}
                           onJump={jumpTo}
                           onReview={() => review(m)}
@@ -864,7 +864,7 @@ function Thread({ contact, narrow, onBack, onDeleted }: { contact: Contact; narr
             </MenuItem>
           )}
           {menu.m.text && (
-            <MenuItem icon={<Copy size={15} />} onClick={() => navigator.clipboard.writeText(menu.m.text ?? "")}>
+            <MenuItem icon={<Copy size={15} />} onClick={() => copyText(menu.m.text ?? "")}>
               Copy text
             </MenuItem>
           )}

@@ -29,6 +29,10 @@ type R = Result<Json<Value>, ApiError>;
 
 /// Invites kept ready on the relay.
 const STOCK: u32 = 10;
+/// Invites made while you wait for a claim; the rest of the stock follows in the background.
+const FIRST: u32 = 3;
+/// How long one relay step of a claim may take before Sotto says the relay can't be reached.
+const STEP: std::time::Duration = std::time::Duration::from_secs(20);
 /// Unused invites this device keeps open at most (each holds a mailbox until it expires).
 const MAX_PENDING: usize = 60;
 
@@ -121,12 +125,31 @@ pub fn parse_address(input: &str) -> Option<(String, Option<String>)> {
     Some((normalize(tag)?, host))
 }
 
+/// What to say when the relay doesn't answer in time.
+fn unreachable(relay: &str) -> ApiError {
+    ApiError::Invalid(format!("Couldn't reach {} in time. Check that you're online, then try again.", host_of(relay)))
+}
+
 /// Make `n` fresh one-time invites (a fresh identity each), returning (contact id, link, expiry).
-async fn make_invites(s: &Session, n: u32) -> Result<Vec<(Id, String, u64)>, ApiError> {
+/// Each one gets [`STEP`] to reach the relay; if one fails, the ones already made are closed.
+async fn make_invites(s: &Session, relay: &str, n: u32) -> Result<Vec<(Id, String, u64)>, ApiError> {
     let label = s.engine.profile().await.display_name;
-    let mut out = Vec::new();
+    let mut out: Vec<(Id, String, u64)> = Vec::new();
     for _ in 0..n {
-        let (id, link) = s.engine.create_invite("", &label, false).await?;
+        let made = match tokio::time::timeout(STEP, s.engine.create_invite("", &label, false)).await {
+            Ok(Ok(x)) => Ok(x),
+            Ok(Err(e)) => Err(ApiError::from(e)),
+            Err(_) => Err(unreachable(relay)),
+        };
+        let (id, link) = match made {
+            Ok(x) => x,
+            Err(e) => {
+                for (id, _, _) in &out {
+                    let _ = s.engine.delete_contact(id).await;
+                }
+                return Err(e);
+            }
+        };
         MAKING.lock().unwrap_or_else(|e| e.into_inner()).push(hex(&id));
         let exp = s.engine.contact(&id).await.and_then(|c| c.invite_expires).unwrap_or_else(|| time::now() + 7 * 86_400);
         out.push((id, link, exp));
@@ -144,7 +167,9 @@ async fn tag_add(s: &Session, r: &TagRecord, invites: Vec<(Vec<u8>, u64)>) -> Re
     let digest = sotto_core::kdf::sha256(&digest);
     let (tag, seed, owner) = (r.tag.clone(), r.seed, signing_public(&r.seed));
     let conn = s.engine.relay(&r.relay).await;
-    match conn.request(move |n| Cmd::TagAdd { sig: sign(&seed, &auth_message(n, "tagadd", &[tag.as_bytes(), &digest])), tag, owner, invites }).await {
+    let add = conn.request(move |n| Cmd::TagAdd { sig: sign(&seed, &auth_message(n, "tagadd", &[tag.as_bytes(), &digest])), tag, owner, invites });
+    let Ok(answer) = tokio::time::timeout(STEP, add).await else { return Err(unreachable(&r.relay)) };
+    match answer {
         Ok(Resp::TagLeft { left }) => Ok(left),
         Err(sotto_client::Error::Relay(ErrCode::Auth)) => Err(ApiError::Invalid(format!("@{} is taken. Try another.", r.tag))),
         Err(e) => Err(e.into()),
@@ -178,7 +203,7 @@ async fn restock(agent: &Agent, s: &Session) -> Result<(), ApiError> {
     let room = MAX_PENDING.saturating_sub(r.pending.len()) as u32;
     let need = STOCK.saturating_sub(left).min(room);
     if need > 0 {
-        let fresh = make_invites(s, need).await?;
+        let fresh = make_invites(s, &r.relay, need).await?;
         r.pending.extend(fresh.iter().map(|(id, _, _)| *id));
         s.cases.put(KEY, &r)?;
         made(&r.pending);
@@ -244,8 +269,9 @@ async fn claim(State(agent): A, Json(b): Json<TagIn>) -> R {
         return Ok(Json(view(&s)));
     }
     let relay = s.engine.profile().await.default_relay;
-    let mut r = TagRecord { tag, relay, seed: sotto_core::rand::bytes(), pending: vec![], created_at: time::now() };
-    let fresh = make_invites(&s, STOCK).await?;
+    let mut r = TagRecord { tag, relay: relay.clone(), seed: sotto_core::rand::bytes(), pending: vec![], created_at: time::now() };
+    // A few invites now, so the tag works the moment it's yours; the rest follow in the background.
+    let fresh = make_invites(&s, &relay, FIRST).await?;
     r.pending = fresh.iter().map(|(id, _, _)| *id).collect();
     let result = tag_add(&s, &r, fresh.into_iter().map(|(_, link, exp)| (link.into_bytes(), exp)).collect()).await;
     if result.is_err() {
@@ -268,6 +294,12 @@ async fn claim(State(agent): A, Json(b): Json<TagIn>) -> R {
     match result {
         Ok(_) => {
             agent.emit(json!({ "type": "contacts" }));
+            drop(_turn);
+            let (a, sess) = (agent.clone(), s.clone());
+            tokio::spawn(async move {
+                let _ = restock(&a, &sess).await;
+                a.emit(json!({ "type": "tag" }));
+            });
             Ok(Json(view(&s)))
         }
         Err(e) => Err(e),
@@ -326,7 +358,10 @@ async fn connect(State(agent): A, Json(b): Json<TagIn>) -> R {
     let link = String::from_utf8(invite).map_err(|_| ApiError::Internal)?;
     let me = s.engine.profile().await.display_name;
     let label = if relay == mine { format!("@{tag}") } else { format!("{tag}@{}", host_of(&relay)) };
-    let id = s.engine.accept_invite(&link, &label, &me).await?;
+    let id = match tokio::time::timeout(STEP, s.engine.accept_invite(&link, &label, &me)).await {
+        Ok(r) => r?,
+        Err(_) => return Err(unreachable(&relay)),
+    };
     agent.emit(json!({ "type": "contacts" }));
     Ok(Json(json!({ "contact_id": hex(&id) })))
 }

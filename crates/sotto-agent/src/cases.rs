@@ -229,6 +229,12 @@ pub async fn start(agent: &Arc<Agent>, s: &Arc<Session>) {
     crate::updates::start(agent);
     crate::scheduled::start(agent, s);
     crate::photos::start(s);
+    // Open the relay connection now, so the sidebar can say straight away whether it's reachable.
+    let sess = s.clone();
+    tokio::spawn(async move {
+        let relay = sess.engine.profile().await.default_relay;
+        sess.engine.relay(&relay).await;
+    });
     let (a, sess) = (agent.clone(), s.clone());
     tokio::spawn(async move {
         while let Some(p) = rx.recv().await {

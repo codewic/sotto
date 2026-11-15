@@ -3,7 +3,7 @@ import { AtSign } from "lucide-react";
 import { useState } from "react";
 import { del, get, patch, post, put } from "../api";
 import { SpotDone } from "../brand/spots";
-import type { Contact } from "../types";
+import type { Contact, Status } from "../types";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { Field, TextArea } from "../ui/Field";
@@ -21,19 +21,40 @@ export const tagOk = (t: string) => /^[a-z][a-z0-9._]{2,23}$/.test(t.trim().repl
 /** A tag someone typed: `@ada`, or a full tag on another relay, `ada@relay.example.org:7400`. */
 export const addressOk = (t: string) => /^@?[a-z][a-z0-9._]{2,23}(@[a-z0-9.-]+(:\d{1,5})?)?$/.test(t.trim().toLowerCase());
 
+/** Where to get Sotto, for the invite message. */
+const GET_SOTTO = "https://www.vorynza.cloud/products/sotto";
+
+/** A tag to suggest from someone's name: "Ada Mensah" becomes ada.mensah. */
+export function suggestTag(name: string): string {
+  const base = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ".")
+    .replace(/[^a-z0-9._]/g, "")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 24);
+  return tagOk(base) ? base : "";
+}
+
 /** Your tag: show and copy it, or pick one. Used in the invite dialog and in Settings. */
 export function TagPanel({ compact = false }: { compact?: boolean }) {
   const qc = useQueryClient();
   const tag = useQuery({ queryKey: ["tag"], queryFn: () => get<TagView>("/api/tag") });
-  const [value, setValue] = useState("");
+  const status = useQuery({ queryKey: ["status"], queryFn: () => get<Status>("/api/status") });
+  const [value, setValue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const suggested = suggestTag(status.data?.profile?.display_name ?? "");
+  const typed = value ?? suggested;
+  const relayHost = (status.data?.profile?.default_relay ?? "").replace(/^wss?:\/\//, "").replace(/\/$/, "");
   const claim = async () => {
     setBusy(true);
     setError(null);
     try {
-      await put("/api/tag", { tag: value });
-      setValue("");
+      await put("/api/tag", { tag: typed });
+      setValue(null);
       await qc.invalidateQueries({ queryKey: ["tag"] });
     } catch (e) {
       setError((e as Error).message);
@@ -41,18 +62,30 @@ export function TagPanel({ compact = false }: { compact?: boolean }) {
       setBusy(false);
     }
   };
+  if (tag.isPending) return <div className="h-[92px] animate-pulse rounded-xl bg-muted" aria-label="Loading your tag" />;
   if (tag.data?.tag) {
+    const address = tag.data.address ?? `@${tag.data.tag}`;
+    const message = `Add me on Sotto: ${address}\n\nGet Sotto at ${GET_SOTTO}`;
     return (
-      <div className="flex items-center gap-3 rounded-xl bg-muted px-4 py-3">
-        <AtSign size={18} className="shrink-0 text-primary" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[15px] font-semibold">@{tag.data.tag}</div>
-          {tag.data.address && <div className="truncate font-mono text-[12px] text-muted-foreground" title="Your full tag">{tag.data.address}</div>}
-          {!compact && (
-            <div className="mt-1 text-[12.5px] text-muted-foreground">Anyone can reach you with your full tag; on your relay, @{tag.data.tag} is enough. You accept each person first.</div>
-          )}
+      <div className="rounded-xl bg-muted px-4 py-3.5">
+        <div className="flex items-center gap-3">
+          <AtSign size={18} className="shrink-0 text-primary" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] text-muted-foreground">Your tag</div>
+            <div className="truncate font-mono text-[15px] font-semibold select-all" title={address}>
+              {address}
+            </div>
+          </div>
         </div>
-        <CopyButton text={tag.data.address ?? `@${tag.data.tag}`} label="Copy" />
+        {!compact && (
+          <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
+            Send this to anyone you want to hear from. They paste it into Add someone, and you accept them first.
+          </p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <CopyButton text={address} label="Copy tag" variant="primary" />
+          <CopyButton text={message} label="Copy invite message" variant="onMuted" />
+        </div>
       </div>
     );
   }
@@ -68,17 +101,23 @@ export function TagPanel({ compact = false }: { compact?: boolean }) {
         <div className="min-w-0 flex-1">
           <Field
             label="Pick a tag"
-            value={value}
+            value={typed}
             onChange={(e) => setValue(e.target.value.toLowerCase().replace(/\s/g, ""))}
             placeholder="ada.mensah"
             spellCheck={false}
             autoComplete="off"
             maxLength={25}
             error={error}
-            hint={error ? undefined : "Like a username, so people can reach you without a link, on your relay or any other. 3 to 24 letters, numbers, dots or underscores."}
+            hint={
+              error
+                ? undefined
+                : busy
+                  ? `Reserving it${relayHost ? ` on ${relayHost}` : ""}. This takes a few seconds.`
+                  : "Like a username: people use it to reach you, no link needed. 3 to 24 letters, numbers, dots or underscores."
+            }
           />
         </div>
-        <Button type="submit" variant="primary" loading={busy} disabled={!tagOk(value)}>
+        <Button type="submit" variant="primary" loading={busy} disabled={!tagOk(typed)}>
           Claim
         </Button>
       </div>
@@ -107,7 +146,7 @@ export function InviteDialog({ open, onClose, onCreated }: { open: boolean; onCl
       open={open}
       onClose={close}
       title={result ? "Share this invite" : "Invite someone"}
-      description={result ? "It works once and expires in 7 days." : linkMode ? "A one-time link, for someone who shouldn't know your tag." : "The easy way: give them your tag."}
+      description={result ? "It works once and expires in 7 days." : linkMode ? "A one-time link, for someone who shouldn't know your tag." : "Give them your tag. They add you with it, and you accept them."}
       width={result ? 520 : 480}
     >
       {result ? (
@@ -174,7 +213,20 @@ export function InviteDialog({ open, onClose, onCreated }: { open: boolean; onCl
   );
 }
 
-/** Add someone by their tag (`@ada`) or by an invite link they gave you: one box for both. */
+/** What someone pasted: an invite link or a tag, found even inside a whole invite message. */
+export function pickContact(input: string): { kind: "link" | "tag"; value: string } | null {
+  const text = input.trim();
+  const link = text.match(/sotto:\/\/\S+/i);
+  if (link) return { kind: "link", value: link[0] };
+  const full = text.match(/@?[a-z][a-z0-9._]{2,23}@[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?/i);
+  if (full) return { kind: "tag", value: full[0].toLowerCase() };
+  if (addressOk(text)) return { kind: "tag", value: text.toLowerCase() };
+  // An old-style link pasted without its scheme.
+  if (text.length > 40 && !/\s/.test(text)) return { kind: "link", value: text };
+  return null;
+}
+
+/** Add someone by their tag or by an invite link they gave you: one box for both. */
 export function AcceptDialog({ open, onClose, onAccepted }: { open: boolean; onClose: () => void; onAccepted: (id: string) => void }) {
   const qc = useQueryClient();
   const [input, setInput] = useState("");
@@ -183,9 +235,10 @@ export function AcceptDialog({ open, onClose, onAccepted }: { open: boolean; onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const value = input.trim();
-  const isTag = addressOk(value);
-  const isLink = !isTag && (/^sotto:\/\//i.test(value) || value.length > 40);
+  const picked = pickContact(input);
+  const value = picked?.value ?? "";
+  const isTag = picked?.kind === "tag";
+  const isLink = picked?.kind === "link";
   const close = () => {
     setInput("");
     setNickname("");
@@ -195,7 +248,7 @@ export function AcceptDialog({ open, onClose, onAccepted }: { open: boolean; onC
     onClose();
   };
   return (
-    <Dialog open={open} onClose={close} title={done ? "You're connected" : "Add someone"} description={done ? undefined : "Type their tag, like @ada, or their full tag if they're on another relay (ada@relay.example.org). Or paste an invite link."}>
+    <Dialog open={open} onClose={close} title={done ? "You're connected" : "Add someone"} description={done ? undefined : "Paste the tag they gave you, like ada@relay.cmigl.org, or an invite link."}>
       {done ? (
         <div className="flex flex-col items-center text-center">
           <SpotDone />
@@ -227,13 +280,13 @@ export function AcceptDialog({ open, onClose, onAccepted }: { open: boolean; onC
         >
           <TextArea
             label="Tag or invite link"
-            rows={isLink ? 3 : 1}
+            rows={isLink || input.includes("\n") ? 3 : 1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             autoFocus
             spellCheck={false}
             autoComplete="off"
-            placeholder="@ada or sotto://invite/…"
+            placeholder="ada@relay.cmigl.org or sotto://invite/…"
             error={error}
           />
           {isLink && (
@@ -242,7 +295,11 @@ export function AcceptDialog({ open, onClose, onAccepted }: { open: boolean; onC
               <Field label="Name they'll see (optional)" value={share} onChange={(e) => setShare(e.target.value)} hint="Leave empty to stay anonymous to them." />
             </>
           )}
-          {isTag && <p className="-mt-3 text-[12.5px] text-muted-foreground">They'll see your display name and can accept or remove you. Nobody else learns you connected.</p>}
+          {isTag && (
+            <p className="-mt-3 text-[12.5px] text-muted-foreground">
+              Connecting to <span className="font-mono text-foreground">{value}</span>. They'll see your display name and can accept or remove you. Nobody else learns you connected.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={close}>
               Cancel

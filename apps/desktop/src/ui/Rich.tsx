@@ -1,3 +1,4 @@
+import { copyText } from "../api";
 import { Check, Copy } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
 import { type Kind, segments, tokenize } from "./highlight";
@@ -55,7 +56,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         <button
           type="button"
           onClick={() =>
-            void navigator.clipboard.writeText(code).then(() => {
+            void copyText(code).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             })

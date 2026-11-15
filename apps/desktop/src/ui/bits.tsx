@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { copyText } from "../api";
 
 export function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-muted px-1.5 font-sans text-[11px] font-medium text-muted-foreground">{children}</kbd>;
@@ -66,20 +67,33 @@ export function Empty({ art, title, children, action }: { art: ReactNode; title:
   );
 }
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
+/** `onMuted` is for a button sitting on a muted surface, where the plain look would vanish. */
+export function CopyButton({ text, label = "Copy", variant = "muted" }: { text: string; label?: string; variant?: "muted" | "onMuted" | "primary" }) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  const look =
+    variant === "primary"
+      ? "bg-primary text-primary-foreground hover:bg-[color-mix(in_srgb,var(--primary)_88%,var(--foreground))]"
+      : variant === "onMuted"
+        ? "bg-muted-strong hover:bg-[color-mix(in_srgb,var(--muted-strong)_80%,var(--foreground))]"
+        : "bg-muted hover:bg-muted-strong";
   return (
     <button
       type="button"
       onClick={async () => {
-        await navigator.clipboard.writeText(text);
-        setDone(true);
-        setTimeout(() => setDone(false), 1600);
+        let ok = true;
+        try {
+          await copyText(text);
+        } catch {
+          ok = false;
+        }
+        setState(ok ? "done" : "failed");
+        setTimeout(() => setState("idle"), ok ? 1600 : 3200);
       }}
-      className="press inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full bg-muted px-3 text-[13px] font-medium hover:bg-muted-strong"
+      aria-live="polite"
+      className={`press inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 text-[13px] font-medium ${look}`}
     >
-      {done ? <Check size={14} className="text-primary" /> : <Copy size={14} />}
-      {done ? "Copied" : label}
+      {state === "done" ? <Check size={14} className={variant === "primary" ? "" : "text-primary"} /> : <Copy size={14} />}
+      {state === "done" ? "Copied" : state === "failed" ? "Couldn't copy. Select the text instead." : label}
     </button>
   );
 }
