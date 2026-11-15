@@ -1,3 +1,4 @@
+import { ResizeHandle, useStoredWidth } from "../ui/Resizer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -102,20 +103,27 @@ export function Shell({ status }: { status: Status }) {
     };
   }, [guarded]);
 
+  // The sidebar: drag its edge to resize; narrow enough and it snaps to icons only. A narrow window
+  // always shows icons only.
+  const [side, setSide, resetSide] = useStoredWidth("sotto.width.sidebar", sideDefault, SIDE_MIN, SIDE_MAX);
+  const narrowWindow = useNarrowWindow();
+  const sideWidth = narrowWindow ? SIDE_MIN : side;
+  const sideWide = sideWidth >= SIDE_LABELS;
+
   return (
     <NavCtx.Provider value={{ go, state, status }}>
       <CallLayer contacts={contacts.data ?? []} onSettings={() => go("settings", "calls")}>
       <div className="flex h-full bg-background">
-        <aside className="flex w-[64px] shrink-0 flex-col pt-1 pb-3 pl-2 md:w-[236px] md:pl-3">
+        <aside className={`@container/side relative flex shrink-0 flex-col pt-1 pb-3 ${sideWide ? "pl-3" : "pl-2"}`} style={{ width: sideWidth }}>
           <button
             type="button"
             onClick={() => setPalette(true)}
             aria-label="Search and commands"
-            className="press mr-2 mb-3 flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg bg-muted px-3 text-[13px] whitespace-nowrap text-muted-foreground hover:bg-muted-strong md:mr-3 md:justify-start"
+            className="press mr-2 mb-3 flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg bg-muted px-3 text-[13px] whitespace-nowrap text-muted-foreground hover:bg-muted-strong @min-[150px]/side:mr-3 @min-[150px]/side:justify-start"
           >
             <Search size={14} />
-            <span className="hidden md:inline">Search</span>
-            <span className="ml-auto hidden md:inline">
+            <span className="hidden @min-[150px]/side:inline">Search</span>
+            <span className="ml-auto hidden @min-[150px]/side:inline">
               <Kbd>⌘K</Kbd>
             </span>
           </button>
@@ -136,11 +144,11 @@ export function Shell({ status }: { status: Status }) {
                   <span className={active ? "text-primary" : "text-muted-foreground group-hover:text-primary"}>
                     <Glyph />
                   </span>
-                  <span className="hidden flex-1 text-left md:inline">{label}</span>
+                  <span className="hidden min-w-0 flex-1 truncate text-left @min-[150px]/side:inline">{label}</span>
                   {unread[screen] ? (
-                    <span className="absolute top-1 left-7 min-w-5 rounded-full md:static bg-primary px-1.5 text-center text-[11px] font-semibold text-primary-foreground tabular">{unread[screen]}</span>
+                    <span className="absolute top-1 left-7 min-w-5 rounded-full @min-[150px]/side:static bg-primary px-1.5 text-center text-[11px] font-semibold text-primary-foreground tabular">{unread[screen]}</span>
                   ) : (
-                    <span className="hidden opacity-0 transition-opacity group-hover:opacity-100 md:inline">
+                    <span className="hidden opacity-0 transition-opacity group-hover:opacity-100 @min-[150px]/side:inline">
                       <Kbd>{key.toUpperCase()}</Kbd>
                     </span>
                   )}
@@ -148,9 +156,9 @@ export function Shell({ status }: { status: Status }) {
               );
             })}
           </nav>
-          <div className="mt-auto mr-2 flex flex-col gap-2 md:mr-3">
+          <div className="mt-auto mr-2 flex flex-col gap-2 @min-[150px]/side:mr-3">
             <UpdateNotice />
-            <div className="hidden md:block">
+            <div className="hidden @min-[150px]/side:block">
               <ConnectionCard status={status} />
             </div>
             <button
@@ -160,12 +168,24 @@ export function Shell({ status }: { status: Status }) {
               className="glyph-host press flex h-10 cursor-pointer items-center gap-3 rounded-xl px-3 text-[14px] text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <GlyphLock />
-              <span className="hidden flex-1 text-left md:inline">Lock Sotto</span>
-              <span className="hidden md:inline">
+              <span className="hidden min-w-0 flex-1 truncate text-left @min-[150px]/side:inline">Lock Sotto</span>
+              <span className="hidden @min-[150px]/side:inline">
                 <Kbd>⌘L</Kbd>
               </span>
             </button>
           </div>
+          {!narrowWindow && (
+            <ResizeHandle
+              label="Resize the sidebar"
+              value={sideWidth}
+              min={SIDE_MIN}
+              max={SIDE_MAX}
+              onChange={setSide}
+              onReset={resetSide}
+              snap={snapSide}
+              className="right-0 translate-x-1/2"
+            />
+          )}
         </aside>
         <main className="mr-2 mb-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-pane shadow-pane">
           {state.screen === "conversations" && <Conversations initial={state.param} />}
@@ -179,6 +199,24 @@ export function Shell({ status }: { status: Status }) {
       </CallLayer>
     </NavCtx.Provider>
   );
+}
+
+/** Sidebar widths: icons only, the point where labels fit, and the widest. */
+const SIDE_MIN = 64;
+const SIDE_LABELS = 150;
+const SIDE_MAX = 340;
+const sideDefault = () => (typeof window !== "undefined" && window.innerWidth < 768 ? SIDE_MIN : 236);
+/** Dragged below where labels fit, the sidebar snaps to icons; dragged out, to a comfortable width. */
+const snapSide = (w: number) => (w < SIDE_LABELS - 20 ? SIDE_MIN : Math.max(w, 200));
+
+function useNarrowWindow() {
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const on = () => setNarrow(window.innerWidth < 768);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return narrow;
 }
 
 function ConnectionCard({ status }: { status: Status }) {

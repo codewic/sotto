@@ -59,6 +59,7 @@ pub fn routes() -> Router<Arc<Agent>> {
         .route("/api/calls/{id}/people", get(people))
         .route("/api/calls/{id}/invite", post(invite))
         .route("/api/calls/{id}/group", post(group))
+        .route("/api/calls/{id}/ring-group", post(ring_group))
 }
 
 fn id(s: &str) -> Result<Id, ApiError> {
@@ -113,26 +114,63 @@ struct GrantOut {
 
 /// One more join token for a room that exists (adding someone to a call).
 async fn request_token(s: &Session, server: &str, room: &str) -> Result<String, ApiError> {
+    request_tokens(s, server, room, 1).await?.into_iter().next().ok_or_else(|| ApiError::Unavailable("The call server sent a reply Sotto doesn't understand.".into()))
+}
+
+/// `count` more join tokens for a room that exists (ringing a group).
+pub(crate) async fn request_tokens(s: &Session, server: &str, room: &str, count: usize) -> Result<Vec<String>, ApiError> {
     let transport = s.engine.profile().await.transport;
     let res = http(&transport)?
         .post(format!("{server}/v1/rooms/{room}/tokens"))
         .header("content-type", "application/json")
-        .body(r#"{"count":1}"#)
+        .body(json!({ "count": count }).to_string())
         .send()
         .await
         .map_err(|_| ApiError::Unavailable("The call server can't be reached right now. Try adding them again.".into()))?;
     match res.status().as_u16() {
         200 => {}
         429 => return Err(ApiError::Unavailable("The call server is busy right now. Try again in a minute.".into())),
+        // An older call server: it can start calls but not add people to one that's going.
+        404 => return Err(ApiError::Unavailable("This call server can't add people to a call that's already going. It needs an update; until then, start a new group call to ring everyone.".into())),
         _ => return Err(ApiError::Unavailable("The call server wouldn't add anyone to this call.".into())),
     }
     let g: GrantOut = res.json().await.map_err(|_| ApiError::Unavailable("The call server sent a reply Sotto doesn't understand.".into()))?;
-    g.tokens.into_iter().next().ok_or_else(|| ApiError::Unavailable("The call server sent a reply Sotto doesn't understand.".into()))
+    if g.tokens.len() != count {
+        return Err(ApiError::Unavailable("The call server sent a reply Sotto doesn't understand.".into()));
+    }
+    Ok(g.tokens)
+}
+
+/// A fresh room with a join token for each of `n` people (a group call), as (url, room, tokens).
+pub(crate) async fn request_huddle(s: &Session, server: &str, n: usize) -> Result<(String, String, Vec<String>), ApiError> {
+    if server.is_empty() {
+        return Err(ApiError::Invalid("Add a call server in Settings first (Protection and account, Calls).".into()));
+    }
+    let transport = s.engine.profile().await.transport;
+    let res = http(&transport)?
+        .post(format!("{server}/v1/rooms"))
+        .header("content-type", "application/json")
+        .body(json!({ "kind": "huddle", "participants": n }).to_string())
+        .send()
+        .await
+        .map_err(|_| ApiError::Unavailable("The call server can't be reached. Check its address in Settings and your connection, then try again.".into()))?;
+    match res.status().as_u16() {
+        200 => {}
+        429 => return Err(ApiError::Unavailable("The call server is busy right now. Try again in a minute.".into())),
+        400 => return Err(ApiError::Invalid("The call server can't hold a call this size.".into())),
+        _ => return Err(ApiError::Unavailable("The call server refused to start a call. Check its address in Settings.".into())),
+    }
+    let g: GrantOut = res.json().await.map_err(|_| ApiError::Unavailable("The call server sent a reply Sotto doesn't understand. Check its address in Settings.".into()))?;
+    let media_ok = g.url.starts_with("wss://") || (server.starts_with("http://") && g.url.starts_with("ws://"));
+    if !media_ok || g.tokens.len() != n {
+        return Err(ApiError::Unavailable("The call server sent a reply Sotto doesn't understand. Check its address in Settings.".into()));
+    }
+    Ok((g.url, g.room, g.tokens))
 }
 
 /// Ask the call broker for a fresh room. Goes through Tor when Sotto uses Tor, so the broker
 /// doesn't learn who is about to call.
-async fn request_room(s: &Session, server: &str) -> Result<RoomGrant, ApiError> {
+pub(crate) async fn request_room(s: &Session, server: &str) -> Result<RoomGrant, ApiError> {
     if server.is_empty() {
         return Err(ApiError::Invalid("Add a call server in Settings first (Protection and account, Calls).".into()));
     }
@@ -209,16 +247,20 @@ async fn test(State(agent): A) -> R {
     Ok(Json(json!({ "ok": true, "media": media })))
 }
 
+/// Whether this desk may start a call now; the call settings if so.
+pub(crate) async fn may_call(s: &Session) -> Result<CallSettings, ApiError> {
+    let c = load(s);
+    match s.settings.lock().await.risk_mode {
+        RiskMode::Extreme => Err(ApiError::Invalid("Calls are off in Extreme mode, because the call server would see your network address. Send a message instead.".into())),
+        RiskMode::High if !c.high_risk_ack => Err(ApiError::Invalid("Read the High risk call notice first.".into())),
+        _ => Ok(c),
+    }
+}
+
 async fn start(State(agent): A, Path(cid): Path<String>) -> R {
     let s = agent.session().await?;
     let contact = id(&cid)?;
-    let c = load(&s);
-    let risk = s.settings.lock().await.risk_mode;
-    match risk {
-        RiskMode::Extreme => return Err(ApiError::Invalid("Calls are off in Extreme mode, because the call server would see your network address. Send a message instead.".into())),
-        RiskMode::High if !c.high_risk_ack => return Err(ApiError::Invalid("Read the High risk call notice first.".into())),
-        _ => {}
-    }
+    let c = may_call(&s).await?;
     let grant = request_room(&s, &c.server).await?;
     let view = s.engine.start_call(&contact, grant).await?;
     Ok(Json(json!(view)))
@@ -261,7 +303,10 @@ async fn joined(State(agent): A, Path(call): Path<String>) -> R {
 async fn join(State(agent): A, Path(call): Path<String>) -> R {
     let s = agent.session().await?;
     let j = s.engine.join_info(&id(&call)?).await?;
-    let name = s.engine.contact(&j.contact_id).await.map(|c| if c.nickname.is_empty() { c.their_name } else { c.nickname }).unwrap_or_default();
+    let name = match &j.title {
+        Some(t) => t.clone(),
+        None => s.engine.contact(&j.contact_id).await.map(|c| if c.nickname.is_empty() { c.their_name } else { c.nickname }).unwrap_or_default(),
+    };
     // The name this desk shares with others in a group call (end-to-end encrypted, inside the call).
     let me = s.engine.profile().await.display_name;
     Ok(Json(json!({
@@ -291,7 +336,19 @@ async fn people(State(agent): A, Path(call): Path<String>) -> R {
         .filter(|c| c.state == "ready" && c.id != view.contact_id && !view.invited.contains(&c.id))
         .map(|c| json!({ "id": c.id, "name": if c.nickname.is_empty() { c.their_name } else { c.nickname }, "verified": c.verified }))
         .collect();
-    Ok(Json(json!({ "can_add": can_add, "people": list })))
+    // A call that rang a whole group can ring it again, for anyone who missed it.
+    let ring_group = s.engine.group_call_ring(&cid).await.is_some();
+    Ok(Json(json!({ "can_add": can_add, "people": list, "ring_group": ring_group })))
+}
+
+/// Ring the group behind a group call again, for anyone who missed it or left.
+async fn ring_group(State(agent): A, Path(call): Path<String>) -> R {
+    let s = agent.session().await?;
+    let cid = id(&call)?;
+    let c = may_call(&s).await?;
+    let (group, url, room, key) = s.engine.group_call_ring(&cid).await.ok_or_else(|| ApiError::Invalid("This call didn't ring a group.".into()))?;
+    let rung = crate::groups::ring(&s, &group, &c.server, cid, url, room, key, None).await?;
+    Ok(Json(json!({ "rung": rung })))
 }
 
 #[derive(Deserialize)]

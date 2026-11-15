@@ -1,3 +1,4 @@
+import { ResizeHandle, useStoredWidth } from "../ui/Resizer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -86,9 +87,16 @@ function Avatar({ c, size = 40 }: { c: Contact; size?: number }) {
   );
 }
 
+/** The conversation list's widths. */
+const LIST_MIN = 260;
+const LIST_MAX = 520;
+const listDefault = () => 340;
+
 export function Conversations({ initial }: { initial?: string }) {
   const qc = useQueryClient();
   const narrow = useBelow(1000);
+  // The list's width: drag its edge; double-click to reset.
+  const [listWidth, setListWidth, resetListWidth] = useStoredWidth("sotto.width.list", listDefault, LIST_MIN, LIST_MAX);
   const guarded = (useNav().status.settings?.risk_mode ?? "standard") !== "standard";
   const contacts = useQuery({ queryKey: ["contacts"], queryFn: () => get<Contact[]>("/api/contacts") });
   const [selected, setSelected] = useState<string | null>(null);
@@ -175,7 +183,18 @@ export function Conversations({ initial }: { initial?: string }) {
   return (
     <div className="flex h-full min-h-0">
       {showList && (
-        <section className={`flex shrink-0 flex-col border-r border-line ${narrow ? "w-full" : "w-[340px]"}`}>
+        <section className={`relative flex shrink-0 flex-col border-r border-line ${narrow ? "w-full" : ""}`} style={narrow ? undefined : { width: listWidth }}>
+          {!narrow && (
+            <ResizeHandle
+              label="Resize the conversation list"
+              value={listWidth}
+              min={LIST_MIN}
+              max={LIST_MAX}
+              onChange={setListWidth}
+              onReset={resetListWidth}
+              className="right-0 translate-x-1/2"
+            />
+          )}
           <header className="flex h-16 shrink-0 items-center gap-2 px-4">
             <h1 className="flex-1 text-[17px] font-semibold tracking-tight">Conversations</h1>
             <IconButton
@@ -1124,11 +1143,14 @@ export function Bubble(props: {
           Not sent. Retry
         </button>
       )}
-      {/* Hover actions: one gesture to reply, react, edit or copy. */}
+      {/* Hover actions: one gesture to reply, react, edit or copy. The padding toward the bubble is
+          part of the bar, so moving the pointer across the gap keeps it open; it also lingers a
+          moment after the pointer leaves, so a curved path doesn't lose it. */}
       <div
-        className={`absolute top-1 hidden items-center gap-0.5 rounded-full bg-pane p-0.5 shadow-float group-focus-within:flex group-hover:flex ${mine ? "right-full mr-2" : "left-full ml-2"} ${picker ? "!flex" : ""}`}
+        className={`invisible absolute top-0 opacity-0 transition-[opacity,visibility] delay-300 duration-150 group-focus-within:visible group-focus-within:opacity-100 group-focus-within:delay-0 group-hover:visible group-hover:opacity-100 group-hover:delay-0 ${mine ? "right-full pr-2" : "left-full pl-2"} ${picker ? "!visible !opacity-100" : ""}`}
         style={{ zIndex: "var(--z-dropdown)" }}
       >
+        <div className="mt-1 flex items-center gap-0.5 rounded-full bg-pane p-0.5 shadow-float">
         {picker ? (
           REACTIONS.map((e) => (
             <button
@@ -1173,6 +1195,7 @@ export function Bubble(props: {
             </IconButton>
           </>
         )}
+        </div>
       </div>
     </div>
   );

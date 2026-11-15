@@ -175,6 +175,12 @@ export type CallView = {
   reason: string | null;
   group: boolean;
   invited: string[];
+  /** Set when the call rang a whole group. */
+  group_id?: string | null;
+  /** For a group call: who started it. */
+  caller?: string | null;
+  /** For a group call: the group's name. */
+  title?: string | null;
 };
 
 export type CallSettings = { server: string; default_server: string; is_default: boolean; high_risk_ack: boolean; allowed: boolean; needs_notice: boolean };

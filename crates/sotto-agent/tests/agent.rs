@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Router;
+use axum::{Json, Router};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
@@ -1182,4 +1182,89 @@ async fn voice_notes_and_videos_play_from_clean_copies() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, _) = get_bytes(&rb, &format!("/api/media/poster?key={}", q(&ckey))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn group_calls_ring_everyone_in_the_group() {
+    // A stand-in call server: rooms and as many join tokens as asked for.
+    let minted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let m2 = minted.clone();
+    let broker = Router::new()
+        .route(
+            "/v1/rooms",
+            axum::routing::post(|Json(b): Json<Value>| async move {
+                // A pair by default, or a huddle with a token for each participant.
+                let n = if b["kind"] == "huddle" { b["participants"].as_u64().unwrap_or(2) as usize } else { 2 };
+                Json(json!({ "url": "ws://127.0.0.1:9", "room": "rabcdefghijklmnopqrstuvwxy", "tokens": (0..n).map(|i| format!("r-{i}")).collect::<Vec<_>>() }))
+            }),
+        )
+        .route(
+            "/v1/rooms/{room}/tokens",
+            axum::routing::post(move |Json(b): Json<Value>| {
+                let m = m2.clone();
+                async move {
+                    let n = b["count"].as_u64().unwrap_or(0) as usize;
+                    m.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+                    Json(json!({ "url": "ws://127.0.0.1:9", "room": "rabcdefghijklmnopqrstuvwxy", "tokens": (0..n).map(|i| format!("t-{i}")).collect::<Vec<_>>() }))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    tokio::spawn(async move { axum::serve(listener, broker).await.unwrap() });
+
+    let url = relay().await;
+    let (da, db, dc) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ra = named_desk(da.path(), &url, "owner-passcode", "Ada").await;
+    let rb = named_desk(db.path(), &url, "member-passcode", "Ben").await;
+    let rc = named_desk(dc.path(), &url, "third-passcode", "Kemi").await;
+    // Ada knows both; Ben and Kemi have never talked.
+    let ben = connect(&ra, &rb, "Ben").await;
+    let kemi = connect(&ra, &rc, "Kemi").await;
+    let (_, g) = call(&ra, "POST", "/api/groups", Some(json!({ "title": "Port contracts", "members": [ben, kemi] }))).await;
+    let id = g["id"].as_str().unwrap().to_string();
+    for r in [&ra, &rb, &rc] {
+        until("three members everywhere", || async { group_view(r, &id).await["member_count"] == 3 }).await;
+    }
+    call(&rb, "PATCH", "/api/calls/settings", Some(json!({ "server": server }))).await;
+
+    // Ben calls the group: Ada and Kemi both ring, although Ben has no conversation with Kemi.
+    let (s, v) = call(&rb, "POST", &format!("/api/groups/{id}/call"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let call_id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["group_id"], id);
+    assert_eq!(minted.load(std::sync::atomic::Ordering::SeqCst), 0, "the room came with a token for everyone");
+    let ringing = |r: &Router| {
+        let (r, call_id) = (r.clone(), call_id.clone());
+        async move { call(&r, "GET", "/api/calls", None).await.1.as_array().unwrap().iter().find(|c| c["id"] == call_id && c["phase"] == "ringing").cloned() }
+    };
+    for r in [&ra, &rc] {
+        until("the ring arrives", || async { ringing(r).await.is_some() }).await;
+    }
+    let ring = ringing(&rc).await.unwrap();
+    assert_eq!(ring["caller"], "Ben");
+    assert_eq!(ring["title"], "Port contracts");
+
+    // Ada answers and can join; Kemi declines.
+    let (s, v) = call(&ra, "POST", &format!("/api/calls/{call_id}/answer"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, j) = call(&ra, "GET", &format!("/api/calls/{call_id}/join"), None).await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    assert_eq!(j["name"], "Port contracts");
+    assert_eq!(j["group"], true);
+    call(&rc, "POST", &format!("/api/calls/{call_id}/decline"), None).await;
+    until("Kemi's ring stops", || async { ringing(&rc).await.is_none() }).await;
+
+    // Ben rings the group again for anyone who missed it: Kemi rings again; Ada, already in, doesn't.
+    let (s, v) = call(&rb, "GET", &format!("/api/calls/{call_id}/people"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ring_group"], true);
+    let (s, v) = call(&rb, "POST", &format!("/api/calls/{call_id}/ring-group"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    until("Kemi rings again", || async { ringing(&rc).await.is_some() }).await;
+    assert_eq!(minted.load(std::sync::atomic::Ordering::SeqCst), 2, "ringing again asks for fresh tokens for the two others");
+    assert!(ringing(&ra).await.is_none());
+    // Nothing about a group call lands in anyone's one-to-one conversations.
+    let msgs = call(&ra, "GET", &format!("/api/contacts/{ben}/messages"), None).await.1;
+    assert!(msgs.as_array().unwrap().iter().all(|m| !m["text"].as_str().unwrap_or("").to_lowercase().contains("call")), "{msgs}");
 }

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, FileText, GitCompare, Palette } from "lucide-react";
+import { Download, FileDown, FileText, GitCompare, Palette } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chooseSavePath, get, imageUrl, post } from "../api";
 import { SpotSandbox } from "../brand/spots";
@@ -90,6 +90,7 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
   const report = useQuery({ queryKey: ["review", reviewKey], queryFn: () => get<Report>(`/api/reviews/${encodeURIComponent(reviewKey)}`), retry: false });
   const [busy, setBusy] = useState(false);
   const [compare, setCompare] = useState(false);
+  const [original, setOriginal] = useState(false);
 
   async function run(greyscale: boolean) {
     if (!file) return;
@@ -112,6 +113,31 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
     try {
       await post(`/api/reviews/${encodeURIComponent(reviewKey)}/export`, { path });
       toast("success", "Clean copy saved. It holds only page images: no text layer, metadata or links.");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  }
+
+  /** A text file (a script, code, notes), saved as text under its own name. */
+  async function exportText() {
+    const path = await chooseSavePath(file?.name ?? "file.txt");
+    if (!path) return;
+    try {
+      await post(`/api/reviews/${encodeURIComponent(reviewKey)}/export-text`, { path });
+      toast("success", "Saved as text. Read it before you run it.");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  }
+
+  /** The file exactly as it arrived, after a warning. */
+  async function saveOriginal() {
+    setOriginal(false);
+    const path = await chooseSavePath(file?.name ?? "file");
+    if (!path) return;
+    try {
+      await post(`/api/reviews/${encodeURIComponent(reviewKey)}/original`, { path });
+      toast("success", "Original saved, unchanged.");
     } catch (e) {
       toast("error", (e as Error).message);
     }
@@ -166,9 +192,23 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
             <Button size="sm" variant="ghost" icon={<Palette size={14} />} onClick={() => run(true)} disabled={!file}>
               Greyscale
             </Button>
-            <Button size="sm" variant="primary" icon={<Download size={14} />} onClick={exportClean}>
-              Export clean copy
+            <Button size="sm" variant="ghost" icon={<FileDown size={14} />} onClick={() => setOriginal(true)}>
+              Save original
             </Button>
+            {r.kind === "text" ? (
+              <>
+                <Button size="sm" variant="ghost" icon={<Download size={14} />} onClick={exportClean}>
+                  Save as PDF
+                </Button>
+                <Button size="sm" variant="primary" icon={<FileText size={14} />} onClick={exportText}>
+                  Save as text file
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="primary" icon={<Download size={14} />} onClick={exportClean}>
+                Export clean copy
+              </Button>
+            )}
           </>
         }
       />
@@ -208,6 +248,34 @@ function ReportView({ reviewKey, file, files }: { reviewKey: string; file?: File
         </aside>
       </div>
       <CompareDialog open={compare} onClose={() => setCompare(false)} a={reviewKey} options={others} />
+      <Dialog
+        open={original}
+        onClose={() => setOriginal(false)}
+        title={`Save the original ${file?.name ?? "file"}?`}
+        description="This is the file exactly as it arrived. Safe review didn't change it, so anything hidden in it comes along."
+      >
+        <div className="flex flex-col gap-4 text-[13.5px] leading-relaxed text-muted-foreground">
+          <ul className="flex flex-col gap-1.5">
+            <li className="flex gap-2">
+              <span aria-hidden="true" className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" />
+              Opening it in another app runs whatever it holds: macros, scripts or links that phone home.
+            </li>
+            <li className="flex gap-2">
+              <span aria-hidden="true" className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" />
+              {r.kind === "text" ? "For a script, read it first: Save as text file gives you the same text to check." : "It still carries its metadata, like author names and edit history."}
+            </li>
+          </ul>
+          <p>Only save it if you trust who sent it and need the original.</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setOriginal(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" icon={<FileDown size={15} />} onClick={() => void saveOriginal()}>
+              Save original
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </>
   );
 }

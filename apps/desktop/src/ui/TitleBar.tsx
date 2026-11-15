@@ -1,5 +1,5 @@
 import { Copy, Minus, Square, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Mark } from "../brand/Mark";
 
 /**
@@ -7,7 +7,7 @@ import { Mark } from "../brand/Mark";
  * maximizes), and the buttons on the right minimize, maximize or restore, and close. On macOS the
  * system's traffic lights stay, so only the space for them is kept.
  */
-export function TitleBar({ brand }: { brand: boolean }) {
+export function TitleBar({ brand, actions }: { brand: boolean; actions?: ReactNode }) {
   const bridge = typeof window !== "undefined" ? window.sotto : undefined;
   const controls = bridge?.window;
   const mac = bridge?.platform === "darwin";
@@ -24,6 +24,11 @@ export function TitleBar({ brand }: { brand: boolean }) {
         </span>
       )}
       <span className="flex-1" />
+      {actions && (
+        <span className="no-drag flex items-center gap-0.5" onDoubleClick={(e) => e.stopPropagation()}>
+          {actions}
+        </span>
+      )}
       {controls && !mac && (
         <span className="flex items-center gap-0.5" onDoubleClick={(e) => e.stopPropagation()}>
           <button type="button" className={button} onClick={() => controls.minimize()} aria-label="Minimize" title="Minimize">

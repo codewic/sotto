@@ -136,6 +136,15 @@ impl Mls {
         self.signer.to_public_vec()
     }
 
+    /// The signature key this desk has inside one group: its own leaf. Usually the same as
+    /// [`Mls::signature_key`], but a desk whose MLS identity was renewed keeps its old key in
+    /// groups it joined before, so anything addressed to "this member" must use this one.
+    pub fn own_key(&self, group_id: &[u8]) -> Result<Vec<u8>> {
+        let group = self.load(group_id)?;
+        let me = group.own_leaf_index();
+        group.members().find(|m| m.index == me).map(|m| m.signature_key.clone()).ok_or(CaseError::UnknownGroup)
+    }
+
     /// A one-time key package so a case owner can add this desk.
     pub fn key_package(&self) -> Result<Vec<u8>> {
         let bundle = KeyPackage::builder().build(CIPHERSUITE, &self.provider, &self.signer, self.credential.clone()).map_err(mls)?;

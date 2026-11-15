@@ -83,6 +83,21 @@ fn detect(head: &[u8]) -> Kind {
     Kind::Unknown
 }
 
+/// For a text file, the text is the file itself: keep it exactly (lines, indentation), instead of
+/// what comes back out of the rendered pages, which wraps long lines. Only whole, valid UTF-8
+/// without NUL bytes, up to the size the reader outside accepts.
+fn keep_text(input: &Path, out: &Path) {
+    const MAX: u64 = 4 * 1024 * 1024;
+    let Ok(f) = fs::File::open(input) else { return };
+    let mut data = Vec::new();
+    if std::io::Read::read_to_end(&mut std::io::Read::take(f, MAX + 1), &mut data).is_err() || data.len() as u64 > MAX || data.contains(&0) {
+        return;
+    }
+    if std::str::from_utf8(&data).is_ok() {
+        let _ = fs::write(out.join("text.txt"), &data);
+    }
+}
+
 fn status(out: &Path, s: &str) {
     let _ = fs::write(out.join("status.txt"), s);
 }
@@ -313,7 +328,10 @@ fn main() {
         Kind::Pdf => render_pdf(input, out).map(|_| "pdf"),
         Kind::Image => render_image(input, out).map(|_| "image"),
         Kind::Office(ext) => convert_office(input, ext).and_then(|pdf| render_pdf(&pdf, out)).map(|_| "office"),
-        Kind::Text => convert_office(input, "txt").and_then(|pdf| render_pdf(&pdf, out)).map(|_| "text"),
+        Kind::Text => convert_office(input, "txt").and_then(|pdf| render_pdf(&pdf, out)).map(|_| {
+            keep_text(input, out);
+            "text"
+        }),
         Kind::Unknown => Err("this file type isn't supported for safe review".into()),
     };
     match result {

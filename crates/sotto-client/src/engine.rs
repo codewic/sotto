@@ -1002,6 +1002,9 @@ impl Engine {
                     answered_ms: None,
                     group: false,
                     invited: Vec::new(),
+                    via_group: None,
+                    caller: String::new(),
+                    title: String::new(),
                 },
             );
             ring
@@ -1043,10 +1046,13 @@ impl Engine {
             }
             c.phase = Phase::Active;
             c.answered_ms = Some(time::now_ms());
-            c.contact
+            c.via_group.is_none().then_some(c.contact)
         };
-        // If this message is lost, the caller still sees us arrive in the room.
-        let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Answer { call_id: *call_id })).await;
+        // If this message is lost, the caller still sees us arrive in the room. A call that rang
+        // a whole group has nobody in particular to tell: the others see us arrive.
+        if let Some(contact) = contact {
+            let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Answer { call_id: *call_id })).await;
+        }
         let v = self.call_view(call_id).await.ok_or(Error::NotFound)?;
         self.emit(Event::Call { call: v.clone() });
         Ok(v)
@@ -1060,9 +1066,13 @@ impl Engine {
             if c.phase != Phase::Ringing {
                 return Err(Error::Invalid("This call isn't ringing any more."));
             }
-            c.contact
+            if c.via_group.is_some() {
+                None
+            } else {
+                Some(c.contact)
+            }
         };
-        if say {
+        if let (true, Some(contact)) = (say, contact) {
             let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Decline { call_id: *call_id })).await;
         }
         self.finish_call(call_id, EndReason::Declined).await;
@@ -1082,6 +1092,108 @@ impl Engine {
             self.emit_call(call_id).await;
         }
         Ok(())
+    }
+
+    /// Start a call that rings a whole group. The app sends the ring through the group itself
+    /// (with a join token for each member); this keeps the call here, joined at once. Returns the
+    /// call's view and its media key, which goes in the ring.
+    pub async fn start_group_call(&self, group: Id, caller: String, title: String, url: String, room: String, my_token: String) -> Result<(CallView, [u8; 32])> {
+        let call_id = new_id();
+        let key: [u8; 32] = sotto_core::rand::bytes();
+        let ring = {
+            let mut calls = self.inner.calls.lock().await;
+            if calls.busy() {
+                return Err(Error::Invalid("You're already on a call."));
+            }
+            let ring = calls.ring();
+            calls.map.insert(
+                call_id,
+                Call {
+                    id: call_id,
+                    contact: group,
+                    direction: Direction::Outgoing,
+                    phase: Phase::Calling,
+                    url,
+                    room,
+                    token: my_token,
+                    key,
+                    started_ms: time::now_ms(),
+                    answered_ms: None,
+                    group: true,
+                    invited: Vec::new(),
+                    via_group: Some(group),
+                    caller,
+                    title,
+                },
+            );
+            ring
+        };
+        let view = self.call_view(&call_id).await.ok_or(Error::NotFound)?;
+        self.emit(Event::Call { call: view.clone() });
+        let me = self.clone();
+        self.spawn_task(async move {
+            tokio::time::sleep(ring).await;
+            if me.call_phase(&call_id).await == Some(Phase::Calling) {
+                me.finish_call(&call_id, EndReason::NoAnswer).await;
+            }
+        });
+        Ok((view, key))
+    }
+
+    /// A group call's ring arrived through the group. Rings like any call, unless this desk is
+    /// busy, already has it, or it stopped ringing before it arrived.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ring_from_group(&self, group: Id, caller: String, title: String, call_id: Id, url: String, room: String, token: String, key: [u8; 32], expires_at: u64) {
+        let now_ms = time::now_ms();
+        {
+            let mut calls = self.inner.calls.lock().await;
+            if calls.map.contains_key(&call_id) || calls.busy() || expires_at <= now_ms {
+                return;
+            }
+            calls.map.insert(
+                call_id,
+                Call {
+                    id: call_id,
+                    contact: group,
+                    direction: Direction::Incoming,
+                    phase: Phase::Ringing,
+                    url,
+                    room,
+                    token,
+                    key,
+                    started_ms: now_ms,
+                    answered_ms: None,
+                    group: true,
+                    invited: Vec::new(),
+                    via_group: Some(group),
+                    caller,
+                    title,
+                },
+            );
+        }
+        self.emit_call(&call_id).await;
+        let me = self.clone();
+        let wait = std::time::Duration::from_millis(expires_at - now_ms);
+        self.spawn_task(async move {
+            tokio::time::sleep(wait).await;
+            if me.call_phase(&call_id).await == Some(Phase::Ringing) {
+                me.finish_call(&call_id, EndReason::Missed).await;
+            }
+        });
+    }
+
+    /// What ringing a group again needs: the group, the room and the media key of a group call
+    /// this desk is in.
+    pub async fn group_call_ring(&self, call_id: &Id) -> Option<(Id, String, String, [u8; 32])> {
+        let calls = self.inner.calls.lock().await;
+        let c = calls.map.get(call_id)?;
+        let group = c.via_group?;
+        matches!(c.phase, Phase::Calling | Phase::Active).then(|| (group, c.url.clone(), c.room.clone(), c.key))
+    }
+
+    /// How long a ring lasts on this desk, for the expiry a group ring carries.
+    pub async fn ring_time(&self) -> std::time::Duration {
+        self.inner.calls.lock().await.ring()
     }
 
     /// The broker room behind a call this desk started or joined by adding people.
@@ -1133,19 +1245,27 @@ impl Engine {
 
     /// Hang up, cancel an outgoing call, or (while ringing) decline silently.
     pub async fn end_call(&self, call_id: &Id) -> Result<()> {
-        let (contact, phase) = {
+        let (contact, phase, invited) = {
             let calls = self.inner.calls.lock().await;
             let c = calls.map.get(call_id).ok_or(Error::NotFound)?;
-            (c.contact, c.phase)
+            (c.via_group.is_none().then_some(c.contact), c.phase, c.invited.clone())
         };
         match phase {
             Phase::Calling => {
-                let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Cancel { call_id: *call_id })).await;
+                if let Some(contact) = contact {
+                    let _ = self.send_payload(&contact, &Payload::Call(CallSignal::Cancel { call_id: *call_id })).await;
+                }
                 self.finish_call(call_id, EndReason::Cancelled).await;
             }
             Phase::Ringing => self.finish_call(call_id, EndReason::Declined).await,
             Phase::Active => {
-                let _ = self.send_payload(&contact, &Payload::Call(CallSignal::End { call_id: *call_id })).await;
+                if let Some(contact) = contact {
+                    let _ = self.send_payload(&contact, &Payload::Call(CallSignal::End { call_id: *call_id })).await;
+                }
+                // People this desk added directly hear that it left too.
+                for c in invited {
+                    let _ = self.send_payload(&c, &Payload::Call(CallSignal::End { call_id: *call_id })).await;
+                }
                 self.finish_call(call_id, EndReason::Finished).await;
             }
             Phase::Ended => {}
@@ -1182,6 +1302,7 @@ impl Engine {
                 key: c.key,
                 outgoing: c.direction == Direction::Outgoing,
                 group: c.group,
+                title: c.via_group.map(|_| c.title.clone()),
             }),
             Phase::Ringing => Err(Error::Invalid("Answer the call first.")),
             Phase::Ended => Err(Error::Invalid("This call has ended.")),
@@ -1193,8 +1314,11 @@ impl Engine {
         let Some(mut call) = self.inner.calls.lock().await.map.remove(call_id) else { return };
         call.phase = Phase::Ended;
         let talked = call.answered_ms.map(|a| time::now_ms().saturating_sub(a) / 1000);
-        let (text, unread) = crate::calls::record(call.direction, reason, talked, call.group);
-        self.add_call_record(&call.contact, text, unread).await;
+        // A call that rang a whole group has no conversation to leave a line in.
+        if call.via_group.is_none() {
+            let (text, unread) = crate::calls::record(call.direction, reason, talked, call.group);
+            self.add_call_record(&call.contact, text, unread).await;
+        }
         self.emit(Event::Call { call: call.view(Some(reason)) });
     }
 
@@ -1261,6 +1385,9 @@ impl Engine {
                                 answered_ms: None,
                                 group,
                                 invited: Vec::new(),
+                                via_group: None,
+                                caller: String::new(),
+                                title: String::new(),
                             },
                         );
                     }

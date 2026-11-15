@@ -59,6 +59,8 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/api/reviews/{key}", get(get_report))
         .route("/api/reviews/{key}/pages/{n}", get(get_page))
         .route("/api/reviews/{key}/export", post(export))
+        .route("/api/reviews/{key}/export-text", post(export_text))
+        .route("/api/reviews/{key}/original", post(save_original))
         .merge(crate::cases::routes())
         .merge(crate::calls::routes())
         .merge(crate::groups::routes())
@@ -710,6 +712,26 @@ async fn export(State(agent): A, Path(key): Path<String>, Json(b): Json<ExportIn
         return Err(ApiError::Invalid("Choose a full path for the clean copy.".into()));
     }
     review::export_clean(&s, &key, &path)?;
+    ok()
+}
+
+async fn export_text(State(agent): A, Path(key): Path<String>, Json(b): Json<ExportIn>) -> R {
+    let s = agent.session().await?;
+    let path = std::path::PathBuf::from(&b.path);
+    if !path.is_absolute() {
+        return Err(ApiError::Invalid("Choose a full path for the file.".into()));
+    }
+    review::export_text(&s, &key, &path)?;
+    ok()
+}
+
+async fn save_original(State(agent): A, Path(key): Path<String>, Json(b): Json<ExportIn>) -> R {
+    let s = agent.session().await?;
+    let path = std::path::PathBuf::from(&b.path);
+    if !path.is_absolute() {
+        return Err(ApiError::Invalid("Choose a full path for the file.".into()));
+    }
+    review::save_original(&s, &key, &path).await?;
     ok()
 }
 

@@ -31,6 +31,8 @@ pub struct JoinInfo {
     pub key: [u8; 32],
     pub outgoing: bool,
     pub group: bool,
+    /// For a call that rang a whole group: the group's name.
+    pub title: Option<String>,
 }
 
 impl std::fmt::Debug for JoinInfo {
@@ -95,6 +97,13 @@ pub(crate) struct Call {
     pub group: bool,
     /// Contacts this desk invited into the call, besides `contact`.
     pub invited: Vec<Id>,
+    /// A call that rang a whole group: that group (an app-level id, not a contact). Its signalling
+    /// goes through the group, so there's no conversation to message or to leave a line in.
+    pub via_group: Option<Id>,
+    /// For a group call: who started it, for the ring ("Kemi").
+    pub caller: String,
+    /// For a group call: the group's name, for the ring and the call window.
+    pub title: String,
 }
 
 impl Drop for Call {
@@ -116,6 +125,12 @@ pub struct CallView {
     pub group: bool,
     /// Contacts this desk added to the call.
     pub invited: Vec<String>,
+    /// Set when the call rang a whole group: that group's id.
+    pub group_id: Option<String>,
+    /// For a group call: who started it.
+    pub caller: Option<String>,
+    /// For a group call: the group's name.
+    pub title: Option<String>,
 }
 
 impl Call {
@@ -130,6 +145,9 @@ impl Call {
             reason,
             group: self.group,
             invited: self.invited.iter().map(|i| hex(i)).collect(),
+            group_id: self.via_group.map(|g| hex(&g)),
+            caller: self.via_group.map(|_| self.caller.clone()),
+            title: self.via_group.map(|_| self.title.clone()),
         }
     }
 }

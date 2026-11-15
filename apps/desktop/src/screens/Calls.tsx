@@ -27,8 +27,11 @@ export function openCallWindow(callId: string) {
   window.open(`./call.html${params}#${callId}`, `sotto-call-${callId}`, "popup,width=400,height=620");
 }
 
-type CallCtx = { call: (c: Contact, more?: Contact[]) => Promise<void>; calls: CallView[] };
-const Ctx = createContext<CallCtx>({ call: async () => {}, calls: [] });
+type CallCtx = { call: (c: Contact, more?: Contact[]) => Promise<void>; callGroup: (groupId: string) => Promise<void>; calls: CallView[] };
+const Ctx = createContext<CallCtx>({ call: async () => {}, callGroup: async () => {}, calls: [] });
+
+/** Who a call is with, for rings and the in-call bar. */
+const callName = (call: CallView, contact?: Contact) => (call.group_id ? call.title || "Group" : nameOf(contact));
 export const useCalls = () => useContext(Ctx);
 
 /** Calls for the main window: starting one, the incoming sheet, and the in-call bar. */
@@ -36,7 +39,8 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
   const qc = useQueryClient();
   const toast = useToast();
   const calls = useQuery({ queryKey: ["calls"], queryFn: () => get<CallView[]>("/api/calls") });
-  const [notice, setNotice] = useState<Contact | null>(null);
+  // The High risk notice, and what to do once it's accepted.
+  const [notice, setNotice] = useState<(() => Promise<void>) | null>(null);
   const [setup, setSetup] = useState(false);
   const byId = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
   const list = useMemo(() => calls.data ?? [], [calls.data]);
@@ -47,8 +51,10 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
         const v = await post<CallView>(`/api/contacts/${c.id}/call`);
         await qc.invalidateQueries({ queryKey: ["calls"] });
         openCallWindow(v.id);
-        // A group call: everyone else gets an invitation to the same call.
-        for (const m of more) await post(`/api/calls/${v.id}/invite`, { contact_id: m.id }).catch(() => {});
+        // Adding people: everyone else gets an invitation to the same call. Say who couldn't be rung.
+        for (const m of more) {
+          await post(`/api/calls/${v.id}/invite`, { contact_id: m.id }).catch((e: ApiError) => toast("error", `Couldn't ring ${nameOf(m)}: ${e.message}`));
+        }
       } catch (e) {
         toast("error", (e as ApiError).message);
       }
@@ -56,9 +62,23 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
     [qc, toast],
   );
 
-  const [pendingMore, setPendingMore] = useState<Contact[]>([]);
-  const call = useCallback(
-    async (c: Contact, more: Contact[] = []) => {
+  /** Ring a whole group through the group itself, so every member rings. */
+  const beginGroup = useCallback(
+    async (groupId: string) => {
+      try {
+        const v = await post<CallView>(`/api/groups/${groupId}/call`);
+        await qc.invalidateQueries({ queryKey: ["calls"] });
+        openCallWindow(v.id);
+      } catch (e) {
+        toast("error", (e as ApiError).message);
+      }
+    },
+    [qc, toast],
+  );
+
+  /** The checks before any call: not already on one, a call server, the protection level. */
+  const ready = useCallback(
+    async (go: () => Promise<void>) => {
       if (list.some((x) => x.phase !== "ended")) {
         toast("info", "You're already on a call. End it first.");
         return;
@@ -75,21 +95,20 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
         toast("info", "Calls are off in Extreme mode, because the call server would see your network address. Send a message instead.");
         return;
       }
-      if (s.needs_notice) {
-        setPendingMore(more);
-        return setNotice(c);
-      }
-      await begin(c, more);
+      if (s.needs_notice) return setNotice(() => go);
+      await go();
     },
-    [list, begin, toast],
+    [list, toast],
   );
+  const call = useCallback((c: Contact, more: Contact[] = []) => ready(() => begin(c, more)), [ready, begin]);
+  const callGroup = useCallback((groupId: string) => ready(() => beginGroup(groupId)), [ready, beginGroup]);
 
   const ringing = list.find((c) => c.phase === "ringing");
   const current = list.find((c) => c.phase === "calling" || c.phase === "active");
 
   return (
-    <Ctx.Provider value={{ call, calls: list }}>
-      {current && <InCallBar call={current} name={nameOf(byId.get(current.contact_id))} />}
+    <Ctx.Provider value={{ call, callGroup, calls: list }}>
+      {current && <InCallBar call={current} name={callName(current, byId.get(current.contact_id))} />}
       {children}
       {ringing && <IncomingCall key={ringing.id} call={ringing} contact={byId.get(ringing.contact_id)} />}
       <Dialog open={setup} onClose={() => setSetup(false)} title="Calls are turned off" description="Calls need a call server, and none is set. Turn calls back on in Settings (Calls), then call again.">
@@ -109,14 +128,14 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
         </div>
       </Dialog>
       <HighRiskNotice
-        contact={notice}
+        open={!!notice}
         onClose={() => setNotice(null)}
         onAgree={async () => {
-          const c = notice;
+          const go = notice;
           setNotice(null);
           try {
             await patch("/api/calls/settings", { high_risk_ack: true });
-            if (c) await begin(c, pendingMore);
+            if (go) await go();
           } catch (e) {
             toast("error", (e as ApiError).message);
           }
@@ -126,9 +145,9 @@ export function CallLayer({ contacts, children, onSettings }: { contacts: Contac
   );
 }
 
-function HighRiskNotice({ contact, onClose, onAgree }: { contact: Contact | null; onClose: () => void; onAgree: () => void }) {
+function HighRiskNotice({ open, onClose, onAgree }: { open: boolean; onClose: () => void; onAgree: () => void }) {
   return (
-    <Dialog open={!!contact} onClose={onClose} title="Before your first call in High risk mode">
+    <Dialog open={open} onClose={onClose} title="Before your first call in High risk mode">
       <div className="flex flex-col gap-4 text-[13.5px] leading-relaxed text-muted-foreground">
         <p>Messages travel over Tor. Calls can't: live voice over Tor is too slow to talk. So a call goes through a call server instead.</p>
         <ul className="flex flex-col gap-1.5">
@@ -181,7 +200,15 @@ function InCallBar({ call, name }: { call: CallView; name: string }) {
     >
       <span aria-hidden="true" className="live-dot size-2 rounded-full bg-primary" />
       <span className="max-w-[40vw] truncate font-medium">
-        {call.phase === "calling" ? `Calling ${name}…` : call.group ? `On a group call with ${name} and others` : `On a call with ${name}`}
+        {call.group_id
+          ? call.phase === "calling"
+            ? `Ringing ${name}…`
+            : `On a group call in ${name}`
+          : call.phase === "calling"
+            ? `Calling ${name}…`
+            : call.group
+              ? `On a group call with ${name} and others`
+              : `On a call with ${name}`}
       </span>
       {call.phase === "active" && <span className="text-muted-foreground tabular">{since(call.answered_at)}</span>}
       <button type="button" onClick={() => openCallWindow(call.id)} className="press h-7 cursor-pointer rounded-full px-3 font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -240,7 +267,8 @@ function IncomingCall({ call, contact }: { call: CallView; contact?: Contact }) 
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   useRingtone(true);
-  const name = nameOf(contact);
+  const viaGroup = !!call.group_id;
+  const name = viaGroup ? call.caller || "Someone" : nameOf(contact);
   const act = async (path: string, body?: unknown) => {
     setBusy(true);
     try {
@@ -259,16 +287,18 @@ function IncomingCall({ call, contact }: { call: CallView; contact?: Contact }) 
       className="no-drag fixed top-4 left-1/2 w-[360px] max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-2xl bg-pane p-4 shadow-float"
       style={{ zIndex: "var(--z-modal)", animation: "dialog-in 220ms var(--ease-smooth)" }}
       role="alertdialog"
-      aria-label={call.group ? `${name} is adding you to a group call` : `Incoming call from ${name}`}
+      aria-label={viaGroup ? `${name} is calling ${call.title ?? "your group"}` : call.group ? `${name} is adding you to a group call` : `Incoming call from ${name}`}
     >
       <div className="flex items-center gap-3">
         <span className="relative grid size-11 shrink-0 place-items-center">
           <span aria-hidden="true" className="call-ring is-calling absolute inset-0 rounded-full bg-[color-mix(in_srgb,var(--primary)_18%,transparent)]" />
-          <Avatar seed={contact ? seedOf(contact) : name} size={40} />
+          <Avatar seed={contact ? seedOf(contact) : `member:${name}`} size={40} />
         </span>
         <div className="min-w-0">
           <div className="truncate text-[15px] font-semibold tracking-tight">{name}</div>
-          <div className="text-[12.5px] text-muted-foreground">{call.group ? "Adding you to a group call" : "Incoming call"} · end-to-end encrypted</div>
+          <div className="text-[12.5px] leading-snug text-muted-foreground">
+            {viaGroup ? `Group call in ${call.title ?? "your group"}` : call.group ? "Adding you to a group call" : "Incoming call"} · end-to-end encrypted
+          </div>
         </div>
       </div>
       <div className="mt-4 flex items-center gap-2">
@@ -288,14 +318,17 @@ function IncomingCall({ call, contact }: { call: CallView; contact?: Contact }) 
           Answer
         </Button>
       </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => act(`/api/calls/${call.id}/decline`, { say: true })}
-        className="mt-2 w-full cursor-pointer rounded-lg py-1 text-center text-[12.5px] text-muted-foreground hover:text-foreground"
-      >
-        Decline and say you can't talk now
-      </button>
+      {/* A group ring has nobody in particular to tell. */}
+      {!viaGroup && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => act(`/api/calls/${call.id}/decline`, { say: true })}
+          className="mt-2 w-full cursor-pointer rounded-lg py-1 text-center text-[12.5px] text-muted-foreground hover:text-foreground"
+        >
+          Decline and say you can't talk now
+        </button>
+      )}
     </div>
   );
 }

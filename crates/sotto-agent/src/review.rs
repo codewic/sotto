@@ -146,3 +146,42 @@ pub fn export_clean(s: &Session, key: &str, path: &Path) -> Result<(), ApiError>
     s.reviews.read_blob(&format!("clean/{key}.pdf"), &mut f)?;
     Ok(())
 }
+
+/// Save a reviewed text file (a script, code, notes) as text: what the sandbox read out of it,
+/// with control characters removed. For text, that is the file's real content.
+pub fn export_text(s: &Session, key: &str, path: &Path) -> Result<(), ApiError> {
+    let json: String = s.reviews.get(&format!("review/{key}"))?.ok_or(ApiError::NotFound)?;
+    let kind = serde_json::from_str::<Value>(&json).ok().and_then(|v| v["kind"].as_str().map(str::to_string)).unwrap_or_default();
+    if kind != "text" {
+        return Err(ApiError::Invalid("Only text files can be saved as text. Save the clean copy instead.".into()));
+    }
+    let text: String = s.reviews.get(&format!("reviewtext/{key}"))?.ok_or(ApiError::NotFound)?;
+    std::fs::write(path, text.as_bytes()).map_err(|_| ApiError::Invalid("Couldn't write to that location.".into()))
+}
+
+/// Save a received file exactly as it arrived, after its review, for someone who needs the
+/// original (a script to run, a spreadsheet to edit). Nothing checks or changes it, which the app
+/// says before asking. Refused in Extreme mode, where received files stay in quarantine.
+pub async fn save_original(s: &Session, key: &str, path: &Path) -> Result<(), ApiError> {
+    if s.settings.lock().await.risk_mode == crate::state::RiskMode::Extreme {
+        return Err(ApiError::Invalid("In Extreme mode received files stay in quarantine. Save the clean copy instead.".into()));
+    }
+    // Only a file that went through safe review.
+    s.reviews.get::<String>(&format!("review/{key}"))?.ok_or_else(|| ApiError::Invalid("Review the file safely first.".into()))?;
+    let (store, blob) = match key.split_once(':') {
+        Some(("m", b)) => (s.engine.store(), b),
+        Some(("d", b)) => (&s.drops, b),
+        Some(("s", b)) => (&s.cases, b),
+        _ => return Err(ApiError::NotFound),
+    };
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| ApiError::Invalid("Couldn't write to that location.".into()))?;
+    store.read_blob(blob, &mut f).map_err(|_| ApiError::Invalid("The original isn't on this device any more.".into()))?;
+    Ok(())
+}

@@ -88,6 +88,76 @@ enum GroupMsg {
     /// From the creator: the Welcome for someone an admin proposed. That admin delivers it over
     /// their own conversation with the new member.
     WelcomeFor { identity: Vec<u8>, welcome: Vec<u8> },
+    /// A call ringing the whole group: where to join, the media key, and a join token for each
+    /// member, keyed by their MLS signature key. Every member rings, whether or not they have a
+    /// conversation with the caller.
+    Call { call_id: Id, from: String, url: String, room: String, key: [u8; 32], expires_at: u64, tokens: Vec<(Vec<u8>, String)> },
+}
+
+/// Most people in one group call (the call server's limit), so at most this many others ring.
+const CALL_OTHERS: usize = 7;
+
+/// Everyone else in a group, by MLS signature key, and the name this desk has in it.
+async fn call_targets(s: &Session, gid: &Id) -> Result<(Vec<Vec<u8>>, String), ApiError> {
+    let g = record(s, gid)?;
+    if g.removed {
+        return Err(ApiError::Invalid("You're no longer in this group.".into()));
+    }
+    let mut rt = s.cases_rt.lock().await;
+    ensure_mls(s, &mut rt).await?;
+    let mls = rt.mls.as_ref().ok_or(ApiError::Internal)?;
+    let mine = mls.own_key(&g.group_id).unwrap_or_else(|_| mls.signature_key());
+    let others: Vec<Vec<u8>> = mls.member_keys(&g.group_id).map_err(|_| ApiError::Internal)?.into_iter().map(|(_, k)| k).filter(|k| *k != mine).collect();
+    if others.is_empty() {
+        return Err(ApiError::Invalid("Nobody else has joined this group yet.".into()));
+    }
+    if others.len() > CALL_OTHERS {
+        return Err(ApiError::Invalid(format!("Group calls hold up to {} people, and this group has {}.", CALL_OTHERS + 1, others.len() + 1)));
+    }
+    Ok((others, name_in(mls, &g.group_id)))
+}
+
+/// Ring everyone else in a group for a call this desk is in, through the group. `tokens`: one
+/// join token per other member, if the call server already gave them; otherwise fresh ones are
+/// asked for. Returns how many were rung.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ring(s: &Session, gid: &Id, server: &str, call_id: Id, url: String, room: String, key: [u8; 32], tokens: Option<Vec<String>>) -> Result<usize, ApiError> {
+    let (others, me) = call_targets(s, gid).await?;
+    let tokens = match tokens {
+        Some(t) if t.len() == others.len() => t,
+        _ => crate::calls::request_tokens(s, server, &room, others.len()).await?,
+    };
+    let n = others.len();
+    let expires_at = time::now_ms() + s.engine.ring_time().await.as_millis() as u64;
+    let msg = GroupMsg::Call { call_id, from: me, url, room, key, expires_at, tokens: others.into_iter().zip(tokens).collect() };
+    let rt = s.cases_rt.lock().await;
+    let mut g = record(s, gid)?;
+    broadcast(s, &rt, &mut g, &msg).await?;
+    persist_mls(s, &rt)?;
+    save(s, &g)?;
+    Ok(n)
+}
+
+/// Call the whole group: everyone else in it rings.
+async fn call(State(agent): A, Path(id): Path<String>) -> R {
+    let s = agent.session().await?;
+    let gid = gid(&id)?;
+    let g = record(&s, &gid)?;
+    if g.removed {
+        return Err(ApiError::Invalid("You're no longer in this group.".into()));
+    }
+    let c = crate::calls::may_call(&s).await?;
+    let (others, me) = call_targets(&s, &gid).await?;
+    // One room with a token for everyone, so the ring needs nothing more from the call server.
+    let (url, room, mut tokens) = crate::calls::request_huddle(&s, &c.server, others.len() + 1).await?;
+    let mine = tokens.remove(0);
+    let (view, key) = s.engine.start_group_call(gid, me, g.title.clone(), url.clone(), room.clone(), mine).await?;
+    let call_id = unhex::<16>(&view.id).map_err(|_| ApiError::Internal)?;
+    if let Err(e) = ring(&s, &gid, &c.server, call_id, url, room, key, Some(tokens)).await {
+        let _ = s.engine.end_call(&call_id).await;
+        return Err(e);
+    }
+    Ok(Json(json!(view)))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -481,6 +551,16 @@ pub async fn on_group(agent: &Arc<Agent>, s: &Arc<Session>, read_id: Id, seq: u6
                     broadcast(s, &rt, &mut g, &GroupMsg::Members(list)).await?;
                     system(s, &mut g, format!("{credential} left the group."))?;
                 }
+                Ok(GroupMsg::Call { call_id, from, url, room, key, expires_at, tokens }) => {
+                    // Rings only if this desk got a token, calls are allowed here and the group isn't muted.
+                    // Its own key inside this group, which is what the caller addressed.
+                    let mine = rt.mls.as_ref().map(|m| m.own_key(&g.group_id).unwrap_or_else(|_| m.signature_key())).unwrap_or_default();
+                    let off = s.settings.lock().await.risk_mode == crate::state::RiskMode::Extreme;
+                    if let (false, false, Some((_, token))) = (off, x.muted, tokens.into_iter().find(|(k, _)| *k == mine)) {
+                        let caller: String = if from.trim().is_empty() { credential.clone() } else { from }.chars().take(60).collect();
+                        s.engine.ring_from_group(g.id, caller, g.title.clone(), call_id, url, room, token, key, expires_at).await;
+                    }
+                }
                 Ok(GroupMsg::Closed) if !g.owner && from_owner => {
                     g.removed = true;
                     system(s, &mut g, "The group was deleted by the person who made it. You can still read what you had.".into())?;
@@ -729,6 +809,7 @@ pub fn routes() -> Router<Arc<Agent>> {
         .route("/api/groups/{id}", get(show).patch(update).delete(leave))
         .route("/api/groups/{id}/read", post(read))
         .route("/api/groups/{id}/messages", get(list_messages).post(send))
+        .route("/api/groups/{id}/call", post(call))
         .route("/api/groups/{id}/messages/{mid}", delete(delete_message).patch(edit))
         .route("/api/groups/{id}/messages/{mid}/react", post(react))
         .route("/api/groups/{id}/members", post(add_member))
@@ -939,17 +1020,27 @@ async fn read(State(agent): A, Path(id): Path<String>) -> R {
 /// The name this desk signed into one group. It's found by our signature key, so it stays right
 /// after you rename yourself (a group keeps the name you joined with until you rejoin).
 fn name_in(mls: &sotto_cases::Mls, group_id: &[u8]) -> String {
-    let key = mls.signature_key();
+    let key = mls.own_key(group_id).unwrap_or_else(|_| mls.signature_key());
     let named = mls.member_keys(group_id).ok().and_then(|ks| ks.into_iter().find(|(_, k)| *k == key)).map(|(n, _)| n);
     String::from_utf8_lossy(named.as_deref().unwrap_or(mls.identity())).to_string()
 }
 
+/// The name this desk goes by on the group's member list: the name in its MLS credential, or,
+/// when the creator listed it under its display name instead, that.
 async fn my_name_in(s: &Session, g: &GroupRecord) -> String {
-    let mut rt = s.cases_rt.lock().await;
-    if ensure_mls(s, &mut rt).await.is_err() {
-        return String::new();
+    let signed = {
+        let mut rt = s.cases_rt.lock().await;
+        if ensure_mls(s, &mut rt).await.is_err() {
+            return String::new();
+        }
+        rt.mls.as_ref().map(|m| name_in(m, &g.group_id)).unwrap_or_default()
+    };
+    let listed = |n: &str| g.members.iter().any(|m| !m.owner && m.name == n);
+    if g.owner || listed(&signed) {
+        return signed;
     }
-    rt.mls.as_ref().map(|m| name_in(m, &g.group_id)).unwrap_or_default()
+    let shown = s.engine.profile().await.display_name;
+    if !shown.trim().is_empty() && listed(&shown) { shown } else { signed }
 }
 
 async fn my_key(s: &Session) -> Result<Vec<u8>, ApiError> {

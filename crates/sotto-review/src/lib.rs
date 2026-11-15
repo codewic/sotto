@@ -161,7 +161,9 @@ pub fn review(input: &Path, work: &Path, opts: &Options) -> Result<Report, Revie
     fs::create_dir_all(&raw).map_err(|_| ReviewError::Io)?;
     let kind = sandbox::run(&opts.render, input, &raw, opts.timeout)?;
 
-    let metadata = analyze::metadata(&read_capped(&raw.join("info.txt"), 64 * 1024));
+    // A plain text file carries no metadata of its own: what the PDF made from it says (creator,
+    // producer, dates) is from the conversion here, so it isn't reported as a finding.
+    let metadata = if kind == "text" { Vec::new() } else { analyze::metadata(&read_capped(&raw.join("info.txt"), 64 * 1024)) };
     let text = read_capped(&raw.join("text.txt"), MAX_TEXT);
     let (words, page_sizes) = analyze::words(&read_capped(&raw.join("words.html"), 64 * 1024 * 1024));
 

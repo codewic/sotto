@@ -274,3 +274,17 @@ fn videos_get_a_clean_poster_a_playable_copy_and_tags_removed_for_sending() {
     assert!(!has(&sent, b"Apapa") && !has(&sent, b"6.4474"), "tags survived the send copy");
     assert!(sent.len() > 1000);
 }
+
+#[test]
+fn a_script_keeps_its_exact_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.bin");
+    let long = "x".repeat(300);
+    let script = format!("#!/usr/bin/env bash\nset -euo pipefail\n\nfor f in *.log; do\n    echo \"$f\"\n\tgzip \"$f\"\ndone\n# {long}\n");
+    std::fs::write(&input, &script).unwrap();
+    let r = review(&input, &dir.path().join("work"), &opts()).unwrap();
+    assert_eq!(r.kind, "text");
+    assert_eq!(r.text, script, "lines, indentation and long lines come back exactly");
+    assert!(r.pages >= 1, "the clean PDF is still made");
+    assert!(r.metadata.is_empty(), "the conversion's own PDF details aren't reported as the file's: {:?}", r.metadata);
+}

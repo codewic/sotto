@@ -42,7 +42,7 @@ export function UpdateNotice() {
         aria-label={`Sotto ${u.version} is ready`}
       >
         <ArrowUpCircle size={17} className="shrink-0" />
-        <span className="hidden min-w-0 flex-1 truncate md:inline">{u.state === "ready" ? "Update ready" : "Update available"}</span>
+        <span className="hidden min-w-0 flex-1 truncate @min-[150px]/side:inline">{u.state === "ready" ? "Update ready" : "Update available"}</span>
       </button>
       <UpdateDialog open={open} onClose={() => setOpen(false)} u={u} />
     </>

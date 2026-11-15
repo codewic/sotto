@@ -218,6 +218,9 @@ async function openCall(id) {
     minHeight: 520,
     title: "Sotto call",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f3f3f3",
+    // Its own title bar, like the main window.
+    frame: process.platform === "darwin",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : undefined,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload-call.cjs"),
@@ -231,6 +234,9 @@ async function openCall(id) {
     },
   });
   const me = callWin;
+  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    me.on(ev, () => !me.isDestroyed() && me.webContents.send("sotto:maximized", me.isMaximized() || me.isFullScreen()));
+  }
   me.once("ready-to-show", () => me.show());
   me.webContents.on("will-navigate", (e) => e.preventDefault());
   me.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -256,15 +262,22 @@ ipcMain.handle("sotto:copy", (e, text) => {
   clipboard.writeText(String(text ?? "").slice(0, 200_000));
   return true;
 });
-// The custom title bar's buttons.
+// The custom title bar's buttons, for the main window and the call window.
+const ownWindow = (e) => {
+  if (win && e.sender === win.webContents && fromApp(e)) return win;
+  if (callWin && e.sender === callWin.webContents && e.senderFrame && e.senderFrame.url.startsWith("file://")) return callWin;
+  return null;
+};
 ipcMain.on("sotto:window", (e, action) => {
-  if (!fromApp(e) || !win) return;
-  if (action === "minimize") win.minimize();
-  else if (action === "toggle-maximize") (win.isMaximized() ? win.unmaximize() : win.maximize());
-  else if (action === "close") win.close();
+  const w = ownWindow(e);
+  if (!w) return;
+  if (action === "minimize") w.minimize();
+  else if (action === "toggle-maximize") (w.isMaximized() ? w.unmaximize() : w.maximize());
+  else if (action === "close") w.close();
 });
 ipcMain.on("sotto:is-maximized", (e) => {
-  e.returnValue = !!win && (win.isMaximized() || win.isFullScreen());
+  const w = ownWindow(e);
+  e.returnValue = !!w && (w.isMaximized() || w.isFullScreen());
 });
 
 ipcMain.handle("sotto:request", (e, method, urlPath, body, headers) =>
@@ -327,6 +340,16 @@ ipcMain.handle("sotto:open-call", (e, id) => {
 });
 // The call window may only talk to its own call's routes.
 const fromCall = (e) => Boolean(callWin && e.sender === callWin.webContents && e.senderFrame && e.senderFrame.url.startsWith("file://"));
+// "Back to Sotto": the call keeps going in its own window, tucked away; the main window's call bar
+// shows it and brings it back.
+ipcMain.on("sotto:call-dock", (e) => {
+  if (!fromCall(e) || !callWin) return;
+  callWin.hide();
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  }
+});
 ipcMain.handle("sotto:call-request", (e, method, urlPath, body) => {
   if (!fromCall(e) || typeof urlPath !== "string" || !callId || !urlPath.startsWith(`/api/calls/${callId}/`)) return { status: 403, body: { error: "Not allowed." } };
   return request(method, urlPath, body, {});

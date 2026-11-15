@@ -586,8 +586,11 @@ struct Meta {
 
 const SEQ_BLOCK: u64 = 1024;
 
-/// Group sequence numbers are persisted in blocks: after a restart each group resumes at the next
-/// block, so numbers only ever grow without writing to disk on every message.
+/// Group sequence numbers are persisted in blocks, so numbers only ever grow without writing to
+/// disk on every message. A save records the start of the block after the current one; a restart
+/// resumes one block past that and saves again at once. So a number handed out after the last
+/// save is never handed out twice, however many times the relay restarts in a row. (Members drop
+/// a number they've already seen, so a reused one would silently lose that message.)
 fn save_meta(shared: &Shared, st: &State) {
     let Some(dir) = &shared.config.data_dir else { return };
     let snd_of: HashMap<&Id, &Id> = st.snd_index.iter().map(|(s, r)| (r, s)).collect();
@@ -615,10 +618,15 @@ fn load_meta(shared: &Shared) -> std::io::Result<()> {
         st.queues.insert(rcv, Queue { last_used: t, rcv_auth: auth, ttl, msgs: VecDeque::new(), subscriber: None, inflight: None });
         st.snd_index.insert(snd, rcv);
     }
-    for (read, write, ttl, next_seq) in meta.groups {
+    for (read, write, ttl, saved) in meta.groups {
+        // One block past what was saved: earlier relays didn't save again after a restart, so
+        // numbers up to a block past the saved one may already be in use.
+        let next_seq = saved.saturating_add(SEQ_BLOCK);
         st.groups.insert(read, Group { ttl, next_seq, msgs: VecDeque::new(), subscribers: Vec::new(), last_used: t });
         st.group_write.insert(write, read);
     }
+    // Record the new starting points now, so the next restart starts past them.
+    save_meta(shared, &st);
     Ok(())
 }
 
@@ -703,5 +711,37 @@ mod tests {
         assert_eq!(st.bytes, 10);
         assert_eq!(st.queues[&[9; 16]].msgs.len(), 1);
         assert!(st.files.is_empty());
+    }
+
+    #[test]
+    fn group_numbers_only_grow_across_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = || Config { data_dir: Some(dir.path().to_path_buf()), ..Config::default() };
+        let (read, write) = ([5u8; 16], [6u8; 16]);
+        let start = || {
+            let shared = Shared { state: Mutex::new(State::default()), config: config() };
+            load_meta(&shared).unwrap();
+            shared
+        };
+        // A group is made and saved, then three messages go out without a save.
+        let first = start();
+        {
+            let mut st = first.lock();
+            st.groups.insert(read, Group { ttl: 60, next_seq: 0, msgs: VecDeque::new(), subscribers: Vec::new(), last_used: 0 });
+            st.group_write.insert(write, read);
+            save_meta(&first, &st);
+            st.groups.get_mut(&read).unwrap().next_seq = 3;
+        }
+        // Restart twice in a row, handing out numbers in between: never the same number twice.
+        let mut used = vec![0u64, 1, 2];
+        for _ in 0..3 {
+            let relay = start();
+            let mut st = relay.lock();
+            let g = st.groups.get_mut(&read).unwrap();
+            let next = g.next_seq;
+            assert!(used.iter().all(|u| *u < next), "resumed at {next}, after {used:?}");
+            used.extend(next..next + 3);
+            g.next_seq = next + 3;
+        }
     }
 }

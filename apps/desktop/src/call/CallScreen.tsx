@@ -381,7 +381,7 @@ export function CallScreen({ callId }: { callId: string }) {
   const inCall = stage.kind === "waiting" || stage.kind === "connecting" || stage.kind === "live" || stage.kind === "reconnecting";
 
   return (
-    <div className="flex h-svh flex-col bg-background p-2">
+    <div className="flex h-full flex-col bg-background px-2 pb-2">
       <div className="relative flex flex-1 flex-col items-center overflow-hidden rounded-2xl bg-pane px-6 pt-5 pb-7 shadow-pane">
         <div className="flex h-7 items-center">
           {encrypted && stage.kind === "live" ? (
@@ -498,11 +498,16 @@ function Tile({ name, speaking = false, ringing = false }: { name: string; speak
 /** Pick a conversation to add to this call. They get an ordinary call invitation. */
 function AddPeople({ callId, onAdded, onClose }: { callId: string; onAdded: (name: string) => void; onClose: () => void }) {
   const [list, setList] = useState<Person[] | null>(null);
+  const [ringGroup, setRingGroup] = useState(false);
+  const [rang, setRang] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => {
-    get<{ people: Person[] }>(`/api/calls/${callId}/people`)
-      .then((r) => setList(r.people))
+    get<{ people: Person[]; ring_group?: boolean }>(`/api/calls/${callId}/people`)
+      .then((r) => {
+        setList(r.people);
+        setRingGroup(!!r.ring_group);
+      })
       .catch((e: ApiError) => setError(e.message));
     const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", close);
@@ -521,9 +526,39 @@ function AddPeople({ callId, onAdded, onClose }: { callId: string; onAdded: (nam
       setBusy(null);
     }
   };
+  const ringAgain = async () => {
+    setBusy("group");
+    setError(null);
+    try {
+      const r = await post<{ rung: number }>(`/api/calls/${callId}/ring-group`);
+      setRang(r.rung);
+    } catch (e) {
+      setError((e as ApiError).message);
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
     <div className="absolute bottom-full left-1/2 mb-2 w-64 -translate-x-1/2 rounded-xl bg-pane p-1 shadow-float" style={{ zIndex: "var(--z-dropdown)" }} role="menu" aria-label="Add people">
-      <div className="px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-muted-foreground">Add to this call</div>
+      {ringGroup && (
+        <>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void ringAgain()}
+            className="flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-muted disabled:opacity-60"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium">Ring the group again</span>
+              <span className="block text-[11.5px] text-muted-foreground">
+                {busy === "group" ? "Ringing…" : rang !== null ? `Ringing everyone who isn't here yet.` : "For anyone who missed it or left"}
+              </span>
+            </span>
+          </button>
+          <div className="mx-2.5 my-1 h-px bg-line" />
+        </>
+      )}
+      <div className="px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-muted-foreground">Add someone you talk to</div>
       {list === null && !error && <p className="px-2.5 py-2 text-[12.5px] text-muted-foreground">Loading…</p>}
       {list?.length === 0 && <p className="px-2.5 py-2 text-[12.5px] text-muted-foreground">Everyone you talk to is already here.</p>}
       {list?.map((p) => (

@@ -12,6 +12,8 @@ type Bridge = {
   setAppearance?(a: { scheme: "light" | "dark"; background: string }): Promise<void>;
   /** Install the staged update after checking its signature again, then restart. */
   installUpdate?(): Promise<{ ok: boolean; error?: string }>;
+  /** The call window only: tuck the call away and show the main window (the call keeps going). */
+  dock?(): void;
   /** Copy text with the app's own clipboard. */
   copy?(text: string): Promise<boolean>;
   /** The operating system, for the title bar (macOS keeps its own window buttons). */

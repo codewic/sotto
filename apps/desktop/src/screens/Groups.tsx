@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AtSign, BellOff, Check, ChevronLeft, Copy, Info, MoreHorizontal, Paperclip, Pencil, Phone, Pin, PinOff, Reply, Search, Shield, ShieldOff, Trash2, UserMinus, Users, X } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type ApiError, del, get, patch, post, copyText } from "../api";
-import type { Contact, GroupView, Message } from "../types";
+import type { Contact, GroupMember, GroupView, Message } from "../types";
 import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { Field } from "../ui/Field";
@@ -31,15 +31,76 @@ function initials(name: string) {
   return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
-/** Groups have a rounded-square mark, conversations a circle, so the list reads at a glance. */
-export function GroupAvatar({ title, size = 44 }: { title: string; size?: number }) {
+/** Who a group's avatar shows: everyone else who has joined, in the group's order. */
+function faces(members: GroupMember[], contacts: Contact[]) {
+  return members
+    .filter((m) => !m.you && !m.pending)
+    .map((m) => {
+      const c = m.contact_id ? contacts.find((x) => x.id === m.contact_id) : undefined;
+      return { key: m.name, seed: c ? seedOf(c) : `member:${m.name}`, choice: c?.avatar ?? null };
+    });
+}
+
+/**
+ * A group's avatar, made from its members: one, a diagonal pair, a triangle of three, or a grid of
+ * four (the last cell counts the rest). Groups keep a rounded-square tile, conversations a circle,
+ * so the list reads at a glance. With nobody else in yet, the group's initials.
+ */
+export function GroupAvatar({ title, members, size = 44 }: { title: string; members?: GroupMember[]; size?: number }) {
+  const contacts = useQuery({ queryKey: ["contacts"], queryFn: () => get<Contact[]>("/api/contacts") }).data ?? [];
+  const people = members ? faces(members, contacts) : [];
+  const tile = "var(--muted-strong)";
+  if (people.length === 0) {
+    return (
+      <span
+        className="grid shrink-0 place-items-center rounded-[30%] font-semibold text-primary"
+        style={{ width: size, height: size, fontSize: size * 0.34, background: `color-mix(in srgb, var(--primary) 14%, ${tile})` }}
+        aria-hidden="true"
+      >
+        {initials(title)}
+      </span>
+    );
+  }
+  const pad = Math.round(size * 0.1);
+  const inner = size - pad * 2;
+  // The gap that separates overlapping faces is the tile's own colour, so it reads as a cut, not a line.
+  const gap = Math.max(1.5, size * 0.045);
+  const face = (p: { key: string; seed: string; choice: string | null }, d: number, x: number, y: number, z: number) => (
+    <span key={p.key} className="absolute grid rounded-full" style={{ left: x, top: y, width: d, height: d, zIndex: z, boxShadow: `0 0 0 ${gap}px ${tile}` }}>
+      <Avatar seed={p.seed} choice={p.choice} size={d} />
+    </span>
+  );
+  let body: ReactNode;
+  if (people.length === 1) {
+    body = face(people[0], inner, 0, 0, 1);
+  } else if (people.length === 2) {
+    const d = Math.round(inner * 0.66);
+    body = [face(people[0], d, 0, 0, 1), face(people[1], d, inner - d, inner - d, 2)];
+  } else if (people.length === 3) {
+    const d = Math.round(inner * 0.56);
+    body = [face(people[0], d, (inner - d) / 2, 0, 1), face(people[1], d, 0, inner - d, 2), face(people[2], d, inner - d, inner - d, 3)];
+  } else {
+    const d = Math.floor((inner - gap) / 2);
+    const more = people.length - 3;
+    const cells = people.slice(0, people.length > 4 ? 3 : 4).map((p, i) => face(p, d, (i % 2) * (inner - d), Math.floor(i / 2) * (inner - d), 1));
+    if (people.length > 4) {
+      cells.push(
+        <span
+          key="more"
+          className="absolute grid place-items-center rounded-full bg-pane font-semibold text-muted-foreground tabular-nums"
+          style={{ left: inner - d, top: inner - d, width: d, height: d, fontSize: Math.max(8, d * 0.4) }}
+        >
+          +{more}
+        </span>,
+      );
+    }
+    body = cells;
+  }
   return (
-    <span
-      className="grid shrink-0 place-items-center rounded-[30%] bg-[color-mix(in_srgb,var(--primary)_14%,var(--muted-strong))] font-semibold text-primary"
-      style={{ width: size, height: size, fontSize: size * 0.34 }}
-      aria-hidden="true"
-    >
-      {initials(title)}
+    <span className="relative inline-block shrink-0 rounded-[30%]" style={{ width: size, height: size, background: tile }} aria-hidden="true">
+      <span className="absolute" style={{ left: pad, top: pad, width: inner, height: inner }}>
+        {body}
+      </span>
     </span>
   );
 }
@@ -58,7 +119,7 @@ export function GroupRow({ g, active, onOpen }: { g: GroupView; active: boolean;
       onClick={onOpen}
       className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-2.5 py-[var(--row-py)] text-left transition-colors duration-150 ${active ? "bg-muted" : "hover:bg-muted/60"}`}
     >
-      <GroupAvatar title={g.title} />
+      <GroupAvatar title={g.title} members={g.members} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
           <span className="truncate text-[14.5px] font-semibold">{g.title}</span>
@@ -210,8 +271,8 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
       .then(refresh)
       .catch((e: ApiError) => toast("error", e.message));
 
-  // Members who are also your conversations can be called together.
-  const callable = group.members.map((m) => contacts.find((c) => c.id === m.contact_id && c.state === "ready")).filter((c): c is Contact => !!c);
+  // A group call rings every member through the group, conversation or not.
+  const callable = !group.removed && group.members.some((m) => !m.you && !m.pending);
   const noun = group.member_count === 1 ? "member" : "members";
   // Who you can @mention: everyone who has joined, except you.
   const mentionable: Member[] = useMemo(
@@ -264,7 +325,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
             </IconButton>
           )}
           <button type="button" onClick={() => setInfo((v) => !v)} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left">
-            <GroupAvatar title={group.title} size={36} />
+            <GroupAvatar title={group.title} members={group.members} size={36} />
             <span className="min-w-0">
               <span className="block truncate text-[15.5px] font-semibold tracking-tight">{group.title}</span>
               <span className="block truncate text-[12.5px] text-muted-foreground">
@@ -275,8 +336,8 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
           <IconButton label="Search this group" aria-pressed={search.open} onClick={() => (search.open ? search.close() : search.show())}>
             <Search size={17} />
           </IconButton>
-          {callable.length > 0 && !group.removed && (
-            <IconButton label="Call the group" onClick={() => void calls.call(callable[0], callable.slice(1))} disabled={calls.calls.some((c) => c.phase !== "ended")}>
+          {callable && (
+            <IconButton label="Call the group" onClick={() => void calls.callGroup(group.id)} disabled={callBusy}>
               <Phone size={17} />
             </IconButton>
           )}
@@ -425,7 +486,7 @@ export function GroupThread({ group, contacts, narrow, onBack, onGone }: { group
                 if (mine) startEdit(mine);
               }}
               members={mentionable}
-              commands={callable.length && !callBusy ? [{ name: "call", hint: "Call everyone you can reach in this group", run: () => void calls.call(callable[0], callable.slice(1)) }] : []}
+              commands={callable && !callBusy ? [{ name: "call", hint: "Ring everyone in this group", run: () => void calls.callGroup(group.id) }] : []}
               schedule={{ kind: "g", target: group.id }}
               risk={status.settings?.risk_mode}
             />
@@ -519,7 +580,7 @@ function GroupInfo({ group, contacts, floating, onClose, onGone }: { group: Grou
         </IconButton>
       </div>
       <div className="flex flex-col items-center px-5 pb-5 text-center">
-        <GroupAvatar title={group.title} size={76} />
+        <GroupAvatar title={group.title} members={group.members} size={76} />
         {manage ? (
           <form
             className="mt-3 w-full"
