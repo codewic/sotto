@@ -115,6 +115,16 @@
   color-scheme: dark;
 }
 
+/* ---------- Product mark: fixed in every accent, so Sotto reads the same in the suite dock ----------
+ * Colours from brand/marks/sotto-light.svg and sotto-dark.svg. Only the bubble body differs by scheme. */
+
+:root {
+  --sotto-mark-body: #2b2170;
+}
+[data-scheme="dark"] {
+  --sotto-mark-body: #3b2e9c;
+}
+
 /* ---------- Accents: tuned per scheme, text contrast at least 4.5:1 ---------- */
 
 :root,
@@ -468,8 +478,8 @@ dialog.sotto-dialog[open] > .dialog-card {
   .mark-hover:hover .mark-bubble {
     transform: translateY(-1px) rotate(-3deg);
   }
-  .mark-hover:hover .mark-hush {
-    transform: scaleX(0.7);
+  .mark-hover:hover .mark-shackle {
+    transform: translateY(1px);
   }
   .glyph-host:hover .g-nudge-down {
     transform: translateY(1.5px);
@@ -488,7 +498,7 @@ dialog.sotto-dialog[open] > .dialog-card {
   }
 }
 .mark-bubble,
-.mark-hush,
+.mark-shackle,
 .g-nudge-down,
 .g-nudge-right,
 .g-turn,

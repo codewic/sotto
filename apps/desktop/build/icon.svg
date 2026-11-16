@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 48 48">
+  <!-- Sotto app icon source: the OS plate from brand/marks/README.md. A white rounded square (radius 25%,
+       #FFFFFF to #F3F4F7) with brand/marks/sotto-light.svg centred at 80%. Render to icon.png (512 px). -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F3F4F7"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="12" fill="url(#plate)"/>
+  <g transform="translate(4.8 4.8) scale(0.8)">
+    <path d="M17 21v-5a7 7 0 0 1 14 0v5" fill="none" stroke="#8F7FFF" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M9 23a4 4 0 0 1 4-4h22a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4H22l-7 5.5V39h-2a4 4 0 0 1-4-4z" fill="#2B2170"/>
+    <g fill="#C9BFFF"><circle cx="17.5" cy="29" r="2"/><circle cx="24" cy="29" r="2"/><circle cx="30.5" cy="29" r="2"/></g>
+  </g>
+</svg>
